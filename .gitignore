@@ -44,3 +44,5 @@ logs/
 # Benchmarks output
 benchmarks/output/
 test_results.txt
+termux_screen.png
+test_termux.sh

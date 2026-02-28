@@ -130,7 +130,10 @@ def detect() -> CPUInfo:
         import psutil  # type: ignore[import-untyped]
 
         physical = psutil.cpu_count(logical=False) or logical
-        freq = psutil.cpu_freq()
+        try:
+            freq = psutil.cpu_freq()
+        except (PermissionError, OSError):
+            freq = None
         if freq:
             freq_base = freq.current or 0.0
             freq_max = freq.max or freq_base
