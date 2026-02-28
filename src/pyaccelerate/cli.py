@@ -74,6 +74,31 @@ def main(argv: list[str] | None = None) -> None:
     # max-mode
     max_p = sub.add_parser("max-mode", help="Show max-mode hardware manifest")
 
+    # tune (auto-tuning)
+    tune_p = sub.add_parser("tune", help="Auto-tune: benchmark → optimise → save profile")
+    tune_p.add_argument("--full", action="store_true", help="Run full (slower) benchmarks")
+    tune_p.add_argument("--apply", action="store_true", help="Apply profile after tuning")
+    tune_p.add_argument("--show", action="store_true", help="Show current tune profile")
+    tune_p.add_argument("--reset", action="store_true", help="Delete saved profile")
+    tune_p.add_argument("--json", action="store_true", dest="tune_json", help="Output as JSON")
+
+    # metrics (Prometheus)
+    metrics_p = sub.add_parser("metrics", help="Prometheus metrics exporter")
+    metrics_p.add_argument("--port", type=int, default=9090, help="HTTP port (default: 9090)")
+    metrics_p.add_argument("--once", action="store_true", help="Print metrics text and exit")
+
+    # serve (HTTP/gRPC server)
+    serve_p = sub.add_parser("serve", help="Start HTTP/gRPC API server")
+    serve_p.add_argument("--http-port", type=int, default=8420, help="HTTP port (default: 8420)")
+    serve_p.add_argument("--grpc-port", type=int, default=50051, help="gRPC port (default: 50051)")
+    serve_p.add_argument("--no-grpc", action="store_true", help="Disable gRPC server")
+    serve_p.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+
+    # k8s (Kubernetes)
+    k8s_p = sub.add_parser("k8s", help="Kubernetes pod & GPU info")
+    k8s_p.add_argument("--manifest", action="store_true", help="Generate deployment YAML")
+    k8s_p.add_argument("--json", action="store_true", dest="k8s_json", help="Output as JSON")
+
     # version
     sub.add_parser("version", help="Show version")
 
@@ -391,6 +416,115 @@ def main(argv: list[str] | None = None) -> None:
         from pyaccelerate.max_mode import MaxMode
         with MaxMode(set_priority=False, set_energy=False) as m:
             print(m.summary())
+        return
+
+    if args.command == "tune":
+        from pyaccelerate.autotune import (
+            auto_tune as _at, load_profile as _lp,
+            apply_profile as _ap, delete_profile as _dp,
+            profile_summary as _ps, needs_retune as _nr,
+        )
+        from dataclasses import asdict as _asd
+
+        if args.reset:
+            ok = _dp()
+            print("Tune profile deleted." if ok else "No profile to delete.")
+            return
+
+        if args.show:
+            profile = _lp()
+            if args.tune_json:
+                print(json.dumps(_asd(profile), indent=2) if profile else '{"profiled": false}')
+            else:
+                print(_ps(profile))
+            return
+
+        # Run tune
+        print("Running auto-tune benchmarks…")
+        profile = _at(quick=not args.full)
+        if args.tune_json:
+            print(json.dumps(_asd(profile), indent=2))
+        else:
+            print(_ps(profile))
+
+        if args.apply:
+            result = _ap(profile)
+            print(f"\nProfile applied: {result}")
+        return
+
+    if args.command == "metrics":
+        from pyaccelerate.metrics import get_metrics_text, start_metrics_server
+        if args.once:
+            print(get_metrics_text())
+            return
+        print(f"Starting Prometheus metrics server on :{args.port}/metrics …")
+        start_metrics_server(port=args.port)
+        try:
+            import time
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+        return
+
+    if args.command == "serve":
+        from pyaccelerate.server import PyAccelerateServer
+        server = PyAccelerateServer(
+            http_port=args.http_port,
+            grpc_port=0 if args.no_grpc else args.grpc_port,
+            host=args.host,
+        )
+        print(f"Starting PyAccelerate API server…")
+        print(f"  HTTP: http://{args.host}:{args.http_port}/api/v1")
+        if not args.no_grpc:
+            print(f"  gRPC: {args.host}:{args.grpc_port}")
+        server.start(grpc=not args.no_grpc, block=True)
+        return
+
+    if args.command == "k8s":
+        from pyaccelerate.k8s import (
+            is_kubernetes as _isk8s, get_pod_info as _gpi,
+            get_node_gpu_capacity as _gngc, get_scaling_recommendation as _gsr,
+            generate_resource_manifest as _grm, get_k8s_summary as _gks,
+        )
+        from dataclasses import asdict as _asd2
+
+        if args.manifest:
+            print(_grm())
+            return
+
+        if args.k8s_json:
+            print(json.dumps(_gks(), indent=2, default=str))
+            return
+
+        print(f"Kubernetes: {'yes' if _isk8s() else 'no'}")
+        if _isk8s():
+            pod = _gpi()
+            print(f"\n── Pod ──")
+            print(f"  Name:       {pod.name}")
+            print(f"  Namespace:  {pod.namespace}")
+            print(f"  Node:       {pod.node_name or 'N/A'}")
+            print(f"  CPU req:    {pod.cpu_request or 'N/A'}")
+            print(f"  CPU limit:  {pod.cpu_limit or 'N/A'}")
+            print(f"  Mem req:    {pod.memory_request or 'N/A'}")
+            print(f"  Mem limit:  {pod.memory_limit or 'N/A'}")
+            print(f"  GPU req:    {pod.gpu_request}")
+            print(f"  GPU limit:  {pod.gpu_limit}")
+
+            gpu_nodes = _gngc()
+            if gpu_nodes:
+                print(f"\n── GPU Nodes ──")
+                for g in gpu_nodes:
+                    print(f"  {g.node_name}: {g.gpu_product} ({g.available}/{g.total} available)")
+
+        rec = _gsr()
+        print(f"\n── Scaling Recommendation ──")
+        print(f"  Replicas: {rec.recommended_replicas}")
+        print(f"  GPU/replica: {rec.gpu_per_replica}")
+        print(f"  CPU/replica: {rec.cpu_per_replica or 'auto'}")
+        print(f"  Mem/replica: {rec.memory_per_replica}")
+        print(f"  Direction: {rec.scale_direction}")
+        print(f"  Reason: {rec.reason}")
         return
 
 

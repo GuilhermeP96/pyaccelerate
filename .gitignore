@@ -43,3 +43,4 @@ logs/
 
 # Benchmarks output
 benchmarks/output/
+test_results.txt

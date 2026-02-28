@@ -15,6 +15,10 @@ Modules
 - **max_mode**   : Maximum optimization mode — all resources in parallel
 - **android**    : Android/Termux platform detection, ARM SoC database, thermal/battery
 - **iot**        : IoT / SBC detection (Raspberry Pi, Jetson, BeagleBone, Coral, Hailo)
+- **autotune**   : Auto-tuning feedback loop (benchmark → config → re-tune)
+- **metrics**    : Prometheus metrics exporter (``/metrics`` HTTP endpoint)
+- **server**     : JSON HTTP & gRPC server for multi-language integration
+- **k8s**        : Kubernetes integration, GPU auto-scaling, manifest generation
 - **engine**     : Unified orchestrator that auto-tunes all subsystems
 
 Quick start::
@@ -72,6 +76,8 @@ from pyaccelerate.priority import (  # noqa: E402, F401
     balanced,
     power_saver,
 )
+from pyaccelerate.autotune import auto_tune, get_or_tune, apply_profile  # noqa: E402, F401
+from pyaccelerate.server import PyAccelerateServer  # noqa: E402, F401
 
 __all__ = [
     "__version__",
@@ -82,4 +88,8 @@ __all__ = [
     "max_performance",
     "balanced",
     "power_saver",
+    "auto_tune",
+    "get_or_tune",
+    "apply_profile",
+    "PyAccelerateServer",
 ]

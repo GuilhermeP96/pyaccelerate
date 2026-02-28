@@ -1,0 +1,38 @@
+{
+  "name": "pyaccelerate",
+  "version": "0.6.0",
+  "description": "Node.js client for PyAccelerate — high-performance Python acceleration engine. Communicates with the PyAccelerate HTTP/gRPC server.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "test": "node test.js",
+    "start-server": "python -m pyaccelerate serve --http-port 8420"
+  },
+  "keywords": [
+    "pyaccelerate",
+    "gpu",
+    "cuda",
+    "npu",
+    "acceleration",
+    "hardware",
+    "benchmark",
+    "prometheus",
+    "kubernetes"
+  ],
+  "author": "Guilherme Pinheiro",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GuilhermeP96/pyaccelerate.git",
+    "directory": "bindings/nodejs"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ]
+}

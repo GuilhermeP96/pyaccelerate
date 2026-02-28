@@ -503,3 +503,48 @@ class Engine:
             return get_sbc_summary()
         except ImportError:
             return {"is_sbc": True, "error": "iot module not available"}
+
+    # ── Auto-tune integration ─────────────────────────────────────────────
+
+    def auto_tune(self, *, quick: bool = True, apply: bool = True) -> Dict[str, Any]:
+        """Run an auto-tuning cycle and optionally apply the results.
+
+        Returns the tune profile as a dict.
+        """
+        from pyaccelerate.autotune import auto_tune as _tune, apply_profile
+        from dataclasses import asdict
+        profile = _tune(quick=quick)
+        result = asdict(profile)
+        if apply:
+            applied = apply_profile(profile)
+            result["applied"] = applied
+        return result
+
+    # ── Metrics ───────────────────────────────────────────────────────────
+
+    def metrics_text(self) -> str:
+        """Return Prometheus-format metrics for this engine."""
+        from pyaccelerate.metrics import get_metrics_text
+        return get_metrics_text()
+
+    def start_metrics_server(self, port: int = 9090) -> Any:
+        """Start a Prometheus metrics HTTP server.
+
+        Returns the HTTPServer instance.
+        """
+        from pyaccelerate.metrics import start_metrics_server
+        return start_metrics_server(port=port)
+
+    # ── Server ────────────────────────────────────────────────────────────
+
+    def serve(
+        self, *, http_port: int = 8420, grpc_port: int = 50051, block: bool = False
+    ) -> Any:
+        """Start an HTTP/gRPC API server exposing this engine.
+
+        Returns the :class:`PyAccelerateServer` instance.
+        """
+        from pyaccelerate.server import PyAccelerateServer
+        srv = PyAccelerateServer(http_port=http_port, grpc_port=grpc_port)
+        srv.start(block=block)
+        return srv

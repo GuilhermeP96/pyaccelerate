@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
-keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization", "priority", "energy", "max-mode", "arm", "android", "termux", "aarch64", "snapdragon", "big-little", "iot", "sbc", "raspberry-pi", "jetson", "coral", "hailo", "embedded"]
+keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization", "priority", "energy", "max-mode", "arm", "android", "termux", "aarch64", "snapdragon", "big-little", "iot", "sbc", "raspberry-pi", "jetson", "coral", "hailo", "embedded", "autotune", "prometheus", "metrics", "grpc", "kubernetes", "k8s", "server", "api"]
 dependencies = [
     "psutil>=5.9",
 ]
@@ -44,6 +44,9 @@ arm = ["tflite-runtime>=2.14; platform_machine=='aarch64'"]
 iot = ["RPi.GPIO>=0.7; platform_machine=='aarch64'"]
 jetson = ["tensorrt>=8.0; platform_machine=='aarch64'"]
 coral = ["pycoral>=2.0"]
+grpc = ["grpcio>=1.60"]
+k8s = ["kubernetes>=28.0"]
+prometheus = ["prometheus_client>=0.20"]
 numpy = ["numpy>=1.26"]
 dev = [
     "pytest>=8.0",
@@ -106,7 +109,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["cupy.*", "pyopencl.*", "dpctl.*", "dpnp.*", "psutil.*", "onnxruntime.*", "openvino.*", "coremltools.*", "intel_npu_acceleration_library.*", "tflite_runtime.*", "tensorflow.*", "RPi.*", "pycoral.*", "tensorrt.*", "rknn.*", "hailo_platform.*"]
+module = ["cupy.*", "pyopencl.*", "dpctl.*", "dpnp.*", "psutil.*", "onnxruntime.*", "openvino.*", "coremltools.*", "intel_npu_acceleration_library.*", "tflite_runtime.*", "tensorflow.*", "RPi.*", "pycoral.*", "tensorrt.*", "rknn.*", "hailo_platform.*", "grpc.*", "kubernetes.*"]
 ignore_missing_imports = true
 
 # ── Coverage ──────────────────────────────────────────────────────────────

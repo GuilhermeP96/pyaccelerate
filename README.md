@@ -1,6 +1,6 @@
 # PyAccelerate
 
-**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU, NPU, ARM/Android/Termux, OS priority, energy profiles and maximum optimization mode.
+**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU, NPU, ARM/Android/Termux, IoT/SBC, auto-tuning, Prometheus metrics, HTTP/gRPC server, Kubernetes auto-scaling, and maximum optimization mode.
 
 [![CI](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/ci.yml/badge.svg)](https://github.com/GuilhermeP96/pyaccelerate/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -23,6 +23,11 @@
 | **`priority`** | OS-level task priority (IDLE → REALTIME) & energy profiles (POWER_SAVER → ULTRA_PERFORMANCE) |
 | **`max_mode`** | Maximum optimization mode — activates ALL resources simultaneously with OS tuning |
 | **`android`** | Android/Termux platform detection, ARM SoC database (25+ chipsets), big.LITTLE, thermal & battery |
+| **`iot`** | IoT / SBC detection (Raspberry Pi, Jetson, BeagleBone, Coral, Hailo, 30+ SoCs) |
+| **`autotune`** | Auto-tuning feedback loop — benchmark → config → re-tune, persistent profiles |
+| **`metrics`** | Prometheus metrics exporter (`/metrics` HTTP endpoint, all subsystems) |
+| **`server`** | JSON HTTP & gRPC server for multi-language integration (Node.js, Go, Java, etc.) |
+| **`k8s`** | Kubernetes operator — pod info, GPU node capacity, auto-scaling, manifest generation |
 | **`engine`** | Unified orchestrator — auto-detects everything and provides a single API |
 
 ## Quick Start
@@ -123,6 +128,16 @@ pyaccelerate priority --preset max     # Apply max performance preset
 pyaccelerate priority --set high       # Set task priority
 pyaccelerate priority --energy performance  # Set energy profile
 pyaccelerate max-mode      # Show max-mode hardware manifest
+pyaccelerate tune          # Auto-tune: benchmark → optimise → save
+pyaccelerate tune --apply  # Tune and apply to current process
+pyaccelerate tune --show   # Show current tune profile
+pyaccelerate metrics       # Start Prometheus /metrics server (:9090)
+pyaccelerate metrics --once# Print metrics and exit
+pyaccelerate serve         # Start HTTP/gRPC API server (:8420)
+pyaccelerate k8s           # Kubernetes pod & GPU info
+pyaccelerate k8s --manifest# Generate K8s Deployment YAML
+pyaccelerate iot           # IoT / SBC board details
+pyaccelerate version       # Print version
 ```
 
 ## ARM / Android / Termux Support
@@ -208,6 +223,106 @@ for batch in batches:
 print(tracker.summary())
 ```
 
+### Auto-Tuning Feedback Loop
+
+Benchmark your hardware, persist the optimal configuration, and auto-apply it:
+
+```python
+from pyaccelerate.autotune import auto_tune, get_or_tune, apply_profile
+
+# Run a full tune cycle (benchmark → save to ~/.pyaccelerate/)
+profile = auto_tune()
+print(f"Overall score: {profile.overall_score}/100")
+print(f"Optimal IO workers: {profile.optimal_io_workers}")
+print(f"Optimal CPU workers: {profile.optimal_cpu_workers}")
+
+# Load existing or re-tune if hardware changed / profile stale
+profile = get_or_tune()
+
+# Apply to running process (sets workers, priority, energy)
+apply_profile()
+```
+
+### Prometheus Metrics
+
+Expose CPU/GPU/NPU/memory/pool metrics in Prometheus format:
+
+```python
+from pyaccelerate.metrics import start_metrics_server, get_metrics_text
+
+# Start /metrics endpoint on port 9090
+start_metrics_server(port=9090)
+
+# Or get text for your own framework
+text = get_metrics_text()
+```
+
+```bash
+pyaccelerate metrics --port 9090     # Start server
+pyaccelerate metrics --once          # Print and exit
+curl http://localhost:9090/metrics    # Scrape
+```
+
+### HTTP / gRPC Server
+
+Multi-language access to all PyAccelerate features:
+
+```python
+from pyaccelerate.server import PyAccelerateServer
+
+with PyAccelerateServer(http_port=8420, grpc_port=50051) as srv:
+    print(f"HTTP: {srv.http_url}/api/v1")
+    # Block until Ctrl+C
+    srv.start(block=True)
+```
+
+```bash
+pyaccelerate serve --http-port 8420 --grpc-port 50051
+curl http://localhost:8420/api/v1/info    # JSON
+curl http://localhost:8420/api/v1/cpu
+curl http://localhost:8420/api/v1/gpu
+curl http://localhost:8420/api/v1/metrics  # Prometheus text
+```
+
+### Kubernetes Integration
+
+Pod detection, GPU node capacity, auto-scaling recommendations & manifest generation:
+
+```python
+from pyaccelerate.k8s import (
+    is_kubernetes, get_pod_info,
+    get_scaling_recommendation, generate_resource_manifest,
+)
+
+if is_kubernetes():
+    pod = get_pod_info()
+    print(f"Pod: {pod.name} | GPU: {pod.gpu_limit}")
+
+rec = get_scaling_recommendation()
+print(f"Replicas: {rec.recommended_replicas} ({rec.reason})")
+
+yaml = generate_resource_manifest(name="ml-worker", gpu_per_replica=1)
+```
+
+```bash
+pyaccelerate k8s                # Show pod & GPU info
+pyaccelerate k8s --manifest     # Generate Deployment YAML
+pyaccelerate k8s --json         # Machine-readable
+```
+
+### Node.js / npm Client
+
+A zero-dependency Node.js client is included in `bindings/nodejs/`:
+
+```javascript
+const { PyAccelerate } = require('pyaccelerate');
+
+const client = new PyAccelerate('http://localhost:8420');
+const info = await client.getInfo();
+const metrics = await client.getMetrics();
+const bench = await client.runBenchmark();
+```
+
 ## Installation Options
 
 ```bash
@@ -225,6 +340,12 @@ pip install pyaccelerate[intel]
 
 # All GPU backends
 pip install pyaccelerate[all-gpu]
+
+# gRPC server mode
+pip install pyaccelerate[grpc]
+
+# Kubernetes integration
+pip install pyaccelerate[k8s]
 
 # Development
 pip install pyaccelerate[dev]
@@ -290,8 +411,15 @@ pyaccelerate/
 ├── benchmark.py    # Built-in micro-benchmarks
 ├── priority.py     # OS task priority & energy profiles
 ├── max_mode.py     # Maximum optimization mode
+├── iot.py          # IoT / SBC hardware detection
+├── autotune.py     # Auto-tuning feedback loop
+├── metrics.py      # Prometheus metrics exporter
+├── server.py       # HTTP + gRPC multi-language API
+├── k8s.py          # Kubernetes pod & GPU integration
 ├── engine.py       # Unified orchestrator
-└── cli.py          # Command-line interface
+├── cli.py          # Command-line interface
+└── bindings/
+    └── nodejs/     # npm client for Node.js / TypeScript
 ```
 
 ## Examples
@@ -316,11 +444,12 @@ python example_priority.py
 
 ## Roadmap
 
-- [ ] npm package (Node.js bindings via pybind11/napi)
-- [ ] gRPC server mode for multi-language integration
-- [ ] Kubernetes operator for auto-scaling GPU workloads
-- [ ] Prometheus metrics exporter
-- [ ] Auto-tuning feedback loop (benchmark → config → re-tune)
+- [x] IoT / SBC detection (Raspberry Pi, Jetson, Coral, Hailo)
+- [x] Auto-tuning feedback loop (benchmark → config → re-tune)
+- [x] Prometheus metrics exporter
+- [x] gRPC server mode for multi-language integration
+- [x] Kubernetes operator for auto-scaling GPU workloads
+- [x] npm package (Node.js bindings via HTTP API)
 
 ## Origin
 
