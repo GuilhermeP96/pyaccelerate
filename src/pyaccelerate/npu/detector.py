@@ -105,6 +105,46 @@ _KNOWN_TOPS: Dict[str, float] = {
     "snapdragon x": 45.0,
     "snapdragon 8 gen 3": 73.0,
     "snapdragon 8 gen 4": 80.0,
+    "snapdragon 8 elite": 80.0,
+    "snapdragon 8 gen 2": 36.0,
+    "snapdragon 8 gen 1": 27.0,
+    "snapdragon 888": 26.0,
+    "snapdragon 865": 15.0,
+    "snapdragon 7+ gen 3": 45.0,
+    "snapdragon 7 gen 3": 20.0,
+    "snapdragon 6 gen 1": 12.0,
+    "hexagon npu": 45.0,
+    "hexagon 780": 26.0,
+    "hexagon 698": 15.0,
+    # Samsung Exynos
+    "exynos 2500": 50.0,
+    "exynos 2200": 34.7,
+    "exynos 2100": 26.0,
+    "exynos 1380": 5.2,
+    "exynos 990": 10.0,
+    "samsung npu": 26.0,
+    # Google Tensor
+    "tensor g4": 35.0,
+    "tensor g3": 30.0,
+    "tensor g2": 22.0,
+    "tensor g1": 18.0,
+    "google tpu": 18.0,
+    # MediaTek Dimensity
+    "dimensity 9300": 46.0,
+    "dimensity 9200": 35.0,
+    "dimensity 9000": 25.0,
+    "dimensity 8300": 20.0,
+    "dimensity 1200": 9.0,
+    "dimensity 1100": 7.0,
+    "dimensity 900": 5.0,
+    "mediatek apu 790": 46.0,
+    "mediatek apu 690": 35.0,
+    "mediatek apu 590": 25.0,
+    "mediatek apu": 9.0,
+    # HiSilicon Kirin
+    "kirin 9010": 25.0,
+    "kirin 9000": 12.0,
+    "da vinci npu": 12.0,
     # Apple
     "m1": 11.0,
     "m1 pro": 11.0,
@@ -143,6 +183,16 @@ def _vendor_from_name(name: str) -> str:
         return "Qualcomm"
     if any(k in nl for k in ("apple", "neural engine", "ane")):
         return "Apple"
+    if any(k in nl for k in ("mediatek", "dimensity", "apu 790", "apu 690", "apu 590", "apu 3")):
+        return "MediaTek"
+    if any(k in nl for k in ("samsung", "exynos", "xclipse")):
+        return "Samsung"
+    if any(k in nl for k in ("google", "tensor", "tpu")):
+        return "Google"
+    if any(k in nl for k in ("hisilicon", "kirin", "da vinci", "davinci")):
+        return "HiSilicon"
+    if any(k in nl for k in ("unisoc",)):
+        return "Unisoc"
     return "unknown"
 
 
@@ -190,7 +240,10 @@ def detect_all() -> List[NPUDevice]:
         # 3. intel-npu-acceleration-library
         npus.extend(_probe_intel_npu_lib(seen))
 
-        # 4. OS-level fallback
+        # 4. ARM / Android NPU (mobile SoCs)
+        npus.extend(_probe_arm_npu(seen))
+
+        # 5. OS-level fallback
         if not npus:
             npus.extend(_probe_os_level(seen))
 
@@ -338,12 +391,117 @@ def _probe_os_level(seen: set[str]) -> List[NPUDevice]:
 
     if system == "Windows":
         npus.extend(_probe_windows_npu(seen))
-    elif system == "Linux":
-        npus.extend(_probe_linux_npu(seen))
     elif system == "Darwin":
         npus.extend(_probe_macos_npu(seen))
+    elif system == "Linux":
+        npus.extend(_probe_linux_npu(seen))
 
     return npus
+
+
+def _probe_arm_npu(seen: set[str]) -> List[NPUDevice]:
+    """Detect ARM mobile/embedded NPUs via SoC database and Android APIs.
+
+    Sources:
+      1. SoC database from android.py (Hexagon, Samsung NPU, Tensor TPU, etc.)
+      2. Android NNAPI availability check
+      3. TFLite delegate probing
+      4. /dev/accel on Android
+    """
+    npus: List[NPUDevice] = []
+
+    try:
+        from pyaccelerate.android import is_arm, is_android, get_soc_info
+    except ImportError:
+        return npus
+
+    if not is_arm():
+        return npus
+
+    # ── SoC database NPU ──
+    soc = get_soc_info()
+    if soc and soc.npu_name and soc.npu_name != "N/A":
+        key = soc.npu_name.lower().strip()
+        if key not in seen:
+            vendor = _vendor_from_name(soc.npu_name) or soc.vendor
+            tops = soc.npu_tops if soc.npu_tops > 0 else _estimate_tops(soc.name)
+            backend = _detect_arm_npu_backend(soc)
+            npus.append(NPUDevice(
+                name=f"{soc.npu_name} ({soc.name})",
+                vendor=vendor,
+                backend=backend,
+                tops=tops,
+            ))
+            seen.add(key)
+
+    # ── Android NNAPI check ──
+    if is_android() and not npus:
+        try:
+            from pathlib import Path
+            # NNAPI is available on Android 8.1+ — check SDK level
+            import subprocess as sp
+            r = sp.run(["getprop", "ro.build.version.sdk"],
+                       capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                sdk = int(r.stdout.strip())
+                if sdk >= 27:  # Android 8.1
+                    key = "android-nnapi"
+                    if key not in seen:
+                        # Try TFLite GPU delegate as backend
+                        backend = "none"
+                        try:
+                            import tflite_runtime  # type: ignore[import-untyped]
+                            backend = "tflite"
+                        except ImportError:
+                            try:
+                                import tensorflow as tf  # type: ignore[import-untyped]
+                                backend = "tflite"
+                            except ImportError:
+                                pass
+
+                        cpu_name = _get_cpu_name()
+                        tops = _estimate_tops(cpu_name)
+                        vendor = _vendor_from_name(cpu_name)
+
+                        npus.append(NPUDevice(
+                            name=f"NNAPI ({cpu_name or 'Android'})",
+                            vendor=vendor,
+                            backend=backend,
+                            tops=tops,
+                        ))
+                        seen.add(key)
+        except Exception:
+            pass
+
+    return npus
+
+
+def _detect_arm_npu_backend(soc) -> str:
+    """Determine best available backend for an ARM NPU."""
+    # QNN EP for Qualcomm Hexagon
+    try:
+        import onnxruntime as ort  # type: ignore[import-untyped]
+        eps = ort.get_available_providers()
+        if "QNNExecutionProvider" in eps:
+            return "onnxrt-qnn"
+        if "DmlExecutionProvider" in eps:
+            return "onnxrt-dml"
+    except ImportError:
+        pass
+
+    # TFLite
+    try:
+        import tflite_runtime  # type: ignore[import-untyped]
+        return "tflite"
+    except ImportError:
+        pass
+    try:
+        import tensorflow  # type: ignore[import-untyped]
+        return "tflite"
+    except ImportError:
+        pass
+
+    return "none"
 
 
 def _probe_windows_npu(seen: set[str]) -> List[NPUDevice]:
@@ -566,6 +724,8 @@ def get_install_hint() -> str:
             hints.append("pip install onnxruntime-qnn")
         elif "apple" in vl:
             hints.append("pip install coremltools")
+        elif "mediatek" in vl or "samsung" in vl or "google" in vl or "hisilicon" in vl:
+            hints.append("pip install tflite-runtime  # Android NNAPI")
         else:
             hints.append("pip install onnxruntime-directml")
 

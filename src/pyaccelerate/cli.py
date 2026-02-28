@@ -53,6 +53,9 @@ def main(argv: list[str] | None = None) -> None:
     # npu
     sub.add_parser("npu", help="NPU detection details")
 
+    # android
+    sub.add_parser("android", help="Android/ARM device details")
+
     # memory
     sub.add_parser("memory", help="Memory stats")
 
@@ -141,8 +144,92 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Frequency:      {info.frequency_mhz:.0f} MHz (boost: {info.frequency_max_mhz:.0f} MHz)")
         print(f"NUMA nodes:     {info.numa_nodes}")
         print(f"SMT ratio:      {info.smt_ratio:.1f}x")
+        if info.is_arm:
+            print(f"ARM:            yes")
+            if info.soc_name:
+                print(f"SoC:            {info.soc_name}")
+            print(f"NEON:           {info.has_neon}")
+            print(f"SVE:            {info.has_sve}")
+            if info.arm_clusters:
+                for name, cpus in info.arm_clusters.items():
+                    print(f"  Cluster:      {name} × {len(cpus)} (CPUs: {cpus})")
+            if info.is_android:
+                print(f"Android:        yes")
         if info.flags:
             print(f"ISA flags:      {', '.join(info.flags)}")
+        return
+
+    if args.command == "android":
+        from pyaccelerate.android import (
+            is_android, is_termux, is_arm, get_device_info, get_soc_info,
+            get_thermal_zones, get_battery_info, is_thermally_throttled,
+            detect_big_little, get_arm_features, get_cpu_freq_info,
+        )
+        if not is_arm():
+            print("Not running on ARM architecture.")
+            return
+        print(f"ARM:       yes ({__import__('platform').machine()})")
+        print(f"Android:   {is_android()}")
+        print(f"Termux:    {is_termux()}")
+
+        # Device info
+        dev = get_device_info()
+        if dev:
+            print("\n── Device Info ──")
+            for k, v in dev.items():
+                print(f"  {k}: {v}")
+
+        # SoC
+        soc = get_soc_info()
+        if soc:
+            print(f"\n── SoC: {soc.name} ({soc.vendor}) ──")
+            print(f"  CPU arch:  {soc.cpu_arch}")
+            cores = f"{soc.cpu_cores_big}B"
+            if soc.cpu_cores_mid:
+                cores += f"+{soc.cpu_cores_mid}M"
+            cores += f"+{soc.cpu_cores_little}L"
+            print(f"  CPU cores: {cores}")
+            print(f"  GPU:       {soc.gpu_name} ({soc.gpu_cores} cores)")
+            print(f"  NPU:       {soc.npu_name} ({soc.npu_tops:.1f} TOPS)")
+            print(f"  Process:   {soc.process_nm} nm")
+
+        # big.LITTLE
+        bl = detect_big_little()
+        if bl:
+            print("\n── big.LITTLE Clusters ──")
+            for name, cpus in bl.items():
+                print(f"  {name}: CPUs {cpus}")
+
+        # ARM features
+        feats = get_arm_features()
+        if feats:
+            print(f"\n── ARM Features ──")
+            print(f"  {', '.join(feats)}")
+
+        # Frequencies
+        freqs = get_cpu_freq_info()
+        if freqs:
+            print("\n── CPU Frequencies ──")
+            for cpu_name, fmap in freqs.items():
+                cur = fmap.get('scaling_cur_freq', 0)
+                mx = fmap.get('cpuinfo_max_freq', fmap.get('scaling_max_freq', 0))
+                print(f"  {cpu_name}: {cur:.0f} MHz (max {mx:.0f} MHz)")
+
+        # Thermal
+        temps = get_thermal_zones()
+        if temps:
+            print(f"\n── Thermal Zones ──")
+            for name, temp in temps.items():
+                print(f"  {name}: {temp:.1f}°C")
+            if is_thermally_throttled():
+                print("  ⚠  THERMALLY THROTTLED")
+
+        # Battery
+        batt = get_battery_info()
+        if batt:
+            print(f"\n── Battery ──")
+            for k, v in batt.items():
+                print(f"  {k}: {v}")
         return
 
     if args.command == "virt":

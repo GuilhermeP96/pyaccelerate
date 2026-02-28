@@ -1,6 +1,6 @@
 # PyAccelerate
 
-**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU, NPU, OS priority, energy profiles and maximum optimization mode.
+**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU, NPU, ARM/Android/Termux, OS priority, energy profiles and maximum optimization mode.
 
 [![CI](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/ci.yml/badge.svg)](https://github.com/GuilhermeP96/pyaccelerate/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -12,16 +12,17 @@
 
 | Module | Description |
 |---|---|
-| **`cpu`** | CPU detection, topology, NUMA, affinity, ISA flags, dynamic worker recommendations |
+| **`cpu`** | CPU detection, topology, NUMA, affinity, ISA flags, ARM big.LITTLE/DynamIQ, dynamic worker recommendations |
 | **`threads`** | Persistent virtual-thread pool, sliding-window executor, async bridge, process pool |
-| **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI), ranking, multi-GPU dispatch |
-| **`npu`** | NPU detection & inference (OpenVINO, ONNX Runtime, DirectML, CoreML) |
+| **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI, ARM Adreno/Mali/Immortalis), ranking, multi-GPU dispatch |
+| **`npu`** | NPU detection & inference (OpenVINO, ONNX Runtime, DirectML, CoreML, ARM Hexagon/Samsung NPU/Tensor TPU/MediaTek APU) |
 | **`virt`** | Virtualization detection (Hyper-V, VT-x/AMD-V, KVM, WSL2, Docker, container detection) |
 | **`memory`** | Memory pressure monitoring, automatic worker clamping, reusable buffer pool |
 | **`profiler`** | `@timed`, `@profile_memory` decorators, `Timer` context manager, `Tracker` statistics |
 | **`benchmark`** | Built-in micro-benchmarks (CPU, threads, memory bandwidth, GPU compute) |
 | **`priority`** | OS-level task priority (IDLE → REALTIME) & energy profiles (POWER_SAVER → ULTRA_PERFORMANCE) |
 | **`max_mode`** | Maximum optimization mode — activates ALL resources simultaneously with OS tuning |
+| **`android`** | Android/Termux platform detection, ARM SoC database (25+ chipsets), big.LITTLE, thermal & battery |
 | **`engine`** | Unified orchestrator — auto-detects everything and provides a single API |
 
 ## Quick Start
@@ -113,6 +114,7 @@ pyaccelerate benchmark     # Run micro-benchmarks
 pyaccelerate gpu           # GPU details
 pyaccelerate cpu           # CPU details
 pyaccelerate npu           # NPU details
+pyaccelerate android       # ARM/Android device details (SoC, clusters, thermal)
 pyaccelerate virt          # Virtualization info
 pyaccelerate memory        # Memory stats
 pyaccelerate status        # One-liner
@@ -122,6 +124,44 @@ pyaccelerate priority --set high       # Set task priority
 pyaccelerate priority --energy performance  # Set energy profile
 pyaccelerate max-mode      # Show max-mode hardware manifest
 ```
+
+## ARM / Android / Termux Support
+
+Full hardware detection for ARM devices — phones (Termux, Pydroid), tablets, Raspberry Pi, ARM laptops (Snapdragon X Elite), and ARM servers:
+
+```python
+from pyaccelerate.android import (
+    is_android, is_termux, is_arm,
+    get_device_info, get_soc_info,
+    detect_big_little, get_arm_features,
+    get_thermal_zones, get_battery_info,
+)
+
+if is_arm():
+    soc = get_soc_info()
+    if soc:
+        print(f"{soc.name} ({soc.vendor})")   # Snapdragon 8 Gen 3 (Qualcomm)
+        print(f"GPU: {soc.gpu_name}")           # Adreno 750
+        print(f"NPU: {soc.npu_name} ({soc.npu_tops} TOPS)")  # Hexagon NPU (73.0 TOPS)
+
+    clusters = detect_big_little()
+    # {"Cortex-X4": [0], "Cortex-A720": [1,2,3], "Cortex-A520": [4,5,6,7]}
+
+    features = get_arm_features()
+    # ["aes", "asimd", "bf16", "crc32", "neon", "sve", "sve2", ...]
+```
+
+**Supported SoC families** (25+ chipsets in database):
+- **Qualcomm** — Snapdragon 8 Elite, 8/7/6 Gen 1-3, 888, 865, X Elite
+- **Samsung** — Exynos 2500, 2200, 2100, 1380, 990
+- **Google** — Tensor G1–G4
+- **MediaTek** — Dimensity 9300, 9200, 9000, 8300, 1200, 1100, 900
+- **HiSilicon** — Kirin 9010, 9000
+- **Unisoc** — T616
+
+**ARM GPU detection** — Adreno, Mali, Immortalis, Xclipse, PowerVR, Maleoon (via SoC DB, sysfs, Vulkan, OpenCL)
+
+**ARM NPU detection** — Hexagon, Samsung NPU, Google TPU, MediaTek APU, Da Vinci NPU (via SoC DB, NNAPI, TFLite)
 
 ## Modules in Depth
 

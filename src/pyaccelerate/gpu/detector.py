@@ -111,6 +111,17 @@ def _vendor_from_name(name: str) -> Tuple[str, bool]:
         return "Intel", is_discrete
     if any(k in nl for k in ("apple", "m1", "m2", "m3", "m4")):
         return "Apple", True
+    # ARM mobile GPUs
+    if any(k in nl for k in ("adreno", "qualcomm")):
+        return "Qualcomm", False
+    if any(k in nl for k in ("mali", "immortalis")):
+        return "ARM", False
+    if any(k in nl for k in ("xclipse", "samsung gpu")):
+        return "Samsung", False
+    if any(k in nl for k in ("powervr", "imagination")):
+        return "Imagination", False
+    if any(k in nl for k in ("maleoon",)):
+        return "HiSilicon", False
     return "unknown", False
 
 
@@ -141,6 +152,9 @@ def detect_all() -> List[GPUDevice]:
 
         # ── Intel oneAPI (dpctl) ──
         gpus.extend(_probe_intel(seen))
+
+        # ── ARM / Android GPU ──
+        gpus.extend(_probe_arm_gpu(seen))
 
         # ── OS-level fallback ──
         if not gpus:
@@ -259,6 +273,166 @@ def _probe_intel(seen: set[str]) -> List[GPUDevice]:
     return gpus
 
 
+# ── ARM / Android GPU probe ─────────────────────────────────────────────
+
+def _probe_arm_gpu(seen: set[str]) -> List[GPUDevice]:
+    """Detect ARM mobile / embedded GPUs (Adreno, Mali, Immortalis, etc.).
+
+    Uses:
+      1. SoC database from android.py (reliable)
+      2. Android sysfs: /sys/class/kgsl (Adreno), /sys/class/misc/mali0 (Mali)
+      3. Vulkan via ``vulkaninfo`` (if installed in Termux)
+      4. OpenCL already catches ARM GPUs in _probe_opencl
+    """
+    gpus: List[GPUDevice] = []
+
+    try:
+        from pyaccelerate.android import is_android, is_arm, get_soc_info
+    except ImportError:
+        return gpus
+
+    if not is_arm():
+        return gpus
+
+    # ── Try SoC database first ──
+    soc = get_soc_info()
+    if soc and soc.gpu_name:
+        key = soc.gpu_name.lower().strip()
+        if key not in seen:
+            vendor, _ = _vendor_from_name(soc.gpu_name)
+            gpu = GPUDevice(
+                name=soc.gpu_name,
+                backend="none",
+                vendor=vendor,
+                compute_units=soc.gpu_cores,
+                is_discrete=False,
+            )
+            # Try OpenCL on ARM to upgrade backend
+            gpu = _try_arm_opencl_upgrade(gpu) or gpu
+            gpus.append(gpu)
+            seen.add(key)
+            return gpus  # SoC DB is authoritative
+
+    # ── Sysfs fallback: KGSL (Qualcomm Adreno) ──
+    try:
+        from pathlib import Path
+        kgsl_path = Path("/sys/class/kgsl/kgsl-3d0")
+        if kgsl_path.exists():
+            gpu_name = "Adreno GPU"
+            try:
+                gpu_model = (kgsl_path / "gpu_model").read_text().strip()
+                if gpu_model:
+                    gpu_name = f"Adreno {gpu_model}"
+            except Exception:
+                pass
+            key = gpu_name.lower().strip()
+            if key not in seen:
+                gpus.append(GPUDevice(
+                    name=gpu_name, backend="none", vendor="Qualcomm",
+                    is_discrete=False,
+                ))
+                seen.add(key)
+    except Exception:
+        pass
+
+    # ── Sysfs fallback: Mali ──
+    try:
+        from pathlib import Path
+        mali_paths = [
+            Path("/sys/class/misc/mali0"),
+            Path("/sys/devices/platform/mali-midgard"),
+            Path("/sys/module/mali_kbase"),
+        ]
+        for mp in mali_paths:
+            if mp.exists():
+                gpu_name = "Mali GPU"
+                # Try to read GPU ID from kernel
+                try:
+                    p = Path("/sys/module/mali_kbase/parameters/gpu_id")
+                    if p.exists():
+                        gpu_name = f"Mali ({p.read_text().strip()})"
+                except Exception:
+                    pass
+                key = gpu_name.lower().strip()
+                if key not in seen:
+                    gpus.append(GPUDevice(
+                        name=gpu_name, backend="none", vendor="ARM",
+                        is_discrete=False,
+                    ))
+                    seen.add(key)
+                break
+    except Exception:
+        pass
+
+    # ── Vulkan fallback (Termux) ──
+    if not gpus:
+        try:
+            r = subprocess.run(
+                ["vulkaninfo", "--summary"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    ll = line.lower()
+                    if "devicename" in ll or "device name" in ll:
+                        gpu_name = line.split("=", 1)[-1].strip().strip('"')
+                        if ":" in gpu_name:
+                            gpu_name = gpu_name.split(":", 1)[-1].strip()
+                        key = gpu_name.lower().strip()
+                        if key and key not in seen:
+                            vendor, _ = _vendor_from_name(gpu_name)
+                            gpus.append(GPUDevice(
+                                name=gpu_name, backend="vulkan",
+                                vendor=vendor, is_discrete=False,
+                            ))
+                            seen.add(key)
+                        break
+        except Exception:
+            pass
+
+    return gpus
+
+
+def _try_arm_opencl_upgrade(gpu: GPUDevice) -> Optional[GPUDevice]:
+    """Try to upgrade an ARM GPU from 'none' to 'opencl' backend."""
+    try:
+        import pyopencl as cl  # type: ignore[import-untyped]
+        for plat in cl.get_platforms():
+            for dev in plat.get_devices(device_type=cl.device_type.GPU):
+                dev_name = dev.name.strip()
+                # Check if this CL device matches our GPU
+                if _gpu_names_match(gpu.name, dev_name):
+                    try:
+                        cus = dev.max_compute_units
+                    except Exception:
+                        cus = gpu.compute_units
+                    return GPUDevice(
+                        name=dev_name,
+                        backend="opencl",
+                        vendor=gpu.vendor,
+                        memory_bytes=dev.global_mem_size,
+                        compute_units=cus,
+                        is_discrete=False,
+                        _module=cl,
+                    )
+    except Exception:
+        pass
+    return None
+
+
+def _gpu_names_match(name_a: str, name_b: str) -> bool:
+    """Check if two GPU name strings likely refer to the same device."""
+    a, b = name_a.lower(), name_b.lower()
+    # Exact substring match
+    if a in b or b in a:
+        return True
+    # Check key identifiers (e.g., "adreno 750" vs "Qualcomm Adreno 750")
+    for token in ("adreno", "mali", "immortalis", "xclipse", "powervr", "maleoon"):
+        if token in a and token in b:
+            return True
+    return False
+
+
 # ── OS-level fallback ───────────────────────────────────────────────────
 
 def _detect_os_gpu_names() -> List[str]:
@@ -286,12 +460,31 @@ def _detect_os_gpu_names() -> List[str]:
                     if "Chipset Model" in line:
                         names.append(line.split(":", 1)[-1].strip())
         else:
-            r = subprocess.run(
-                ["lspci"], capture_output=True, text=True, timeout=10,
-            )
-            for line in r.stdout.splitlines():
-                if "VGA" in line or "3D" in line or "Display" in line:
-                    names.append(line.split(":", 2)[-1].strip())
+            # ARM/Android: no lspci — use getprop or device-tree
+            try:
+                from pyaccelerate.android import is_android, get_soc_info
+                if is_android():
+                    soc = get_soc_info()
+                    if soc and soc.gpu_name:
+                        names.append(soc.gpu_name)
+                    if not names:
+                        # Try getprop for GPU hints
+                        r2 = subprocess.run(
+                            ["getprop", "ro.hardware.egl"],
+                            capture_output=True, text=True, timeout=3,
+                        )
+                        if r2.returncode == 0 and r2.stdout.strip():
+                            names.append(r2.stdout.strip())
+            except ImportError:
+                pass
+
+            if not names:
+                r = subprocess.run(
+                    ["lspci"], capture_output=True, text=True, timeout=10,
+                )
+                for line in r.stdout.splitlines():
+                    if "VGA" in line or "3D" in line or "Display" in line:
+                        names.append(line.split(":", 2)[-1].strip())
     except Exception:
         pass
     return names
@@ -358,6 +551,11 @@ def get_install_hint() -> str:
             hints.append("pip install pyopencl")
         elif "amd" in vl:
             hints.append("pip install pyopencl")
+    # ARM GPUs — suggest OpenCL or Vulkan
+    for g in gpus:
+        vl = g.vendor.lower()
+        if vl in ("qualcomm", "arm", "samsung", "imagination", "hisilicon"):
+            hints.append("pip install pyopencl  # ARM OpenCL")
     if hints:
         return "Install GPU support:  " + "  or  ".join(sorted(set(hints)))
     return ""

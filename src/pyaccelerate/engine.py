@@ -288,8 +288,23 @@ class Engine:
             lines.append(f"║       Base: {c.frequency_mhz:.0f} MHz | Boost: {c.frequency_max_mhz:.0f} MHz")
         if c.numa_nodes > 1:
             lines.append(f"║       NUMA: {c.numa_nodes} nodes")
-        if c.flags:
+        if c.is_arm:
+            arm_parts = []
+            if c.soc_name:
+                arm_parts.append(f"SoC: {c.soc_name}")
+            if c.arm_clusters:
+                cls_str = ", ".join(f"{k}×{len(v)}" for k, v in c.arm_clusters.items())
+                arm_parts.append(f"Clusters: {cls_str}")
+            if c.has_neon:
+                arm_parts.append("NEON")
+            if c.has_sve:
+                arm_parts.append("SVE")
+            if arm_parts:
+                lines.append(f"║       ARM: {' | '.join(arm_parts)}")
+        if c.flags and not c.is_arm:
             lines.append(f"║       ISA: {', '.join(c.flags[:8])}")
+        elif c.flags and c.is_arm:
+            lines.append(f"║       Features: {', '.join(c.flags[:10])}")
 
         # GPU
         usable = self.usable_gpus
@@ -348,6 +363,20 @@ class Engine:
             f"CPU={self._cpu_workers} processes"
         )
 
+        # Android/Termux
+        if c.is_android:
+            try:
+                from pyaccelerate.android import (
+                    is_thermally_throttled, get_battery_info, is_termux
+                )
+                env = "Termux" if is_termux() else "Android"
+                batt = get_battery_info()
+                batt_str = f"{batt.get('capacity', '?')}% ({batt.get('status', '?')})" if batt else "N/A"
+                throttle = "⚠ THROTTLED" if is_thermally_throttled() else "OK"
+                lines.append(f"║  Platform: {env} | Battery: {batt_str} | Thermal: {throttle}")
+            except Exception:
+                lines.append("║  Platform: Android")
+
         lines.append("╚══════════════════════════════════════════════════════════════╝")
         return "\n".join(lines)
 
@@ -396,6 +425,10 @@ class Engine:
                 "freq_max_mhz": self._cpu.frequency_max_mhz,
                 "numa_nodes": self._cpu.numa_nodes,
                 "flags": self._cpu.flags,
+                "is_arm": self._cpu.is_arm,
+                "arm_clusters": {k: v for k, v in self._cpu.arm_clusters.items()} if self._cpu.arm_clusters else {},
+                "soc_name": self._cpu.soc_name,
+                "is_android": self._cpu.is_android,
             },
             "gpu": {
                 "enabled": self.gpu_enabled,
