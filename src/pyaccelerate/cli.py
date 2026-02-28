@@ -56,6 +56,18 @@ def main(argv: list[str] | None = None) -> None:
     # memory
     sub.add_parser("memory", help="Memory stats")
 
+    # priority
+    prio_p = sub.add_parser("priority", help="Task priority & energy management")
+    prio_p.add_argument("--set", choices=["idle", "below-normal", "normal", "above-normal", "high", "realtime"],
+                        help="Set task priority")
+    prio_p.add_argument("--energy", choices=["power-saver", "balanced", "performance", "ultra-performance"],
+                        help="Set energy profile")
+    prio_p.add_argument("--preset", choices=["max", "balanced", "saver"],
+                        help="Apply a preset (max/balanced/saver)")
+
+    # max-mode
+    max_p = sub.add_parser("max-mode", help="Show max-mode hardware manifest")
+
     # version
     sub.add_parser("version", help="Show version")
 
@@ -168,6 +180,51 @@ def main(argv: list[str] | None = None) -> None:
             if k == "error":
                 continue
             print(f"  {k}: {v:.2f}")
+        return
+
+    if args.command == "priority":
+        from pyaccelerate.priority import (
+            TaskPriority as _TP, EnergyProfile as _EP,
+            set_task_priority as _stp, set_energy_profile as _sep,
+            get_priority_info as _gpi,
+            max_performance as _mp, balanced as _bal, power_saver as _ps,
+        )
+
+        if args.preset:
+            presets = {"max": _mp, "balanced": _bal, "saver": _ps}
+            result = presets[args.preset]()
+            print(f"Preset '{args.preset}' applied: {result}")
+            return
+
+        if args.set:
+            p_map = {
+                "idle": _TP.IDLE, "below-normal": _TP.BELOW_NORMAL,
+                "normal": _TP.NORMAL, "above-normal": _TP.ABOVE_NORMAL,
+                "high": _TP.HIGH, "realtime": _TP.REALTIME,
+            }
+            ok = _stp(p_map[args.set])
+            print(f"Task priority → {args.set}: {'OK' if ok else 'FAILED'}")
+
+        if args.energy:
+            e_map = {
+                "power-saver": _EP.POWER_SAVER, "balanced": _EP.BALANCED,
+                "performance": _EP.PERFORMANCE,
+                "ultra-performance": _EP.ULTRA_PERFORMANCE,
+            }
+            ok = _sep(e_map[args.energy])
+            print(f"Energy profile → {args.energy}: {'OK' if ok else 'FAILED'}")
+
+        if not args.set and not args.energy:
+            info = _gpi()
+            print("Current priority settings:")
+            for k, v in info.items():
+                print(f"  {k}: {v}")
+        return
+
+    if args.command == "max-mode":
+        from pyaccelerate.max_mode import MaxMode
+        with MaxMode(set_priority=False, set_energy=False) as m:
+            print(m.summary())
         return
 
 

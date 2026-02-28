@@ -1,6 +1,6 @@
 # PyAccelerate
 
-**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU and virtualization.
+**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU, NPU, OS priority, energy profiles and maximum optimization mode.
 
 [![CI](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/ci.yml/badge.svg)](https://github.com/GuilhermeP96/pyaccelerate/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -15,10 +15,13 @@
 | **`cpu`** | CPU detection, topology, NUMA, affinity, ISA flags, dynamic worker recommendations |
 | **`threads`** | Persistent virtual-thread pool, sliding-window executor, async bridge, process pool |
 | **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI), ranking, multi-GPU dispatch |
+| **`npu`** | NPU detection & inference (OpenVINO, ONNX Runtime, DirectML, CoreML) |
 | **`virt`** | Virtualization detection (Hyper-V, VT-x/AMD-V, KVM, WSL2, Docker, container detection) |
 | **`memory`** | Memory pressure monitoring, automatic worker clamping, reusable buffer pool |
 | **`profiler`** | `@timed`, `@profile_memory` decorators, `Timer` context manager, `Tracker` statistics |
 | **`benchmark`** | Built-in micro-benchmarks (CPU, threads, memory bandwidth, GPU compute) |
+| **`priority`** | OS-level task priority (IDLE → REALTIME) & energy profiles (POWER_SAVER → ULTRA_PERFORMANCE) |
+| **`max_mode`** | Maximum optimization mode — activates ALL resources simultaneously with OS tuning |
 | **`engine`** | Unified orchestrator — auto-detects everything and provides a single API |
 
 ## Quick Start
@@ -43,6 +46,65 @@ engine.run_parallel(process_file, [(f,) for f in files])
 results = engine.gpu_dispatch(my_kernel, data_chunks)
 ```
 
+## Maximum Optimization Mode
+
+Activates **all** available hardware resources in parallel with OS-level tuning:
+
+```python
+from pyaccelerate.max_mode import MaxMode
+
+with MaxMode() as m:
+    print(m.summary())  # hardware manifest
+
+    # Run CPU + I/O simultaneously
+    results = m.run_all(
+        cpu_fn=cpu_heavy_task, cpu_items=cpu_data,
+        io_fn=io_heavy_task, io_items=io_data,
+    )
+
+    # I/O only (thread pool)
+    downloaded = m.run_io(download, [(url,) for url in urls])
+
+    # CPU only (process pool)
+    computed = m.run_cpu(crunch, [(n,) for n in numbers])
+
+    # Multi-stage pipeline
+    results = m.run_pipeline([
+        ("download", download_fn, urls),
+        ("transform", transform_fn, data),
+        ("save", save_fn, output),
+    ])
+```
+
+Or via the Engine:
+
+```python
+engine = Engine()
+with engine.max_mode() as m:
+    results = m.run_all(...)
+```
+
+## OS Priority & Energy Management
+
+Control process scheduling and power profiles across Windows, Linux & macOS:
+
+```python
+from pyaccelerate.priority import (
+    TaskPriority, EnergyProfile,
+    set_task_priority, set_energy_profile,
+    max_performance, balanced, power_saver,
+)
+
+# Quick presets
+max_performance()   # HIGH priority + ULTRA_PERFORMANCE energy
+balanced()          # Restore defaults
+power_saver()       # BELOW_NORMAL + POWER_SAVER
+
+# Fine-grained control
+set_task_priority(TaskPriority.ABOVE_NORMAL)
+set_energy_profile(EnergyProfile.PERFORMANCE)
+```
+
 ## CLI
 
 ```bash
@@ -50,9 +112,15 @@ pyaccelerate info          # Full hardware report
 pyaccelerate benchmark     # Run micro-benchmarks
 pyaccelerate gpu           # GPU details
 pyaccelerate cpu           # CPU details
+pyaccelerate npu           # NPU details
 pyaccelerate virt          # Virtualization info
 pyaccelerate memory        # Memory stats
 pyaccelerate status        # One-liner
+pyaccelerate priority      # Show current priority/energy
+pyaccelerate priority --preset max     # Apply max performance preset
+pyaccelerate priority --set high       # Set task priority
+pyaccelerate priority --energy performance  # Set energy profile
+pyaccelerate max-mode      # Show max-mode hardware manifest
 ```
 
 ## Modules in Depth
@@ -171,12 +239,39 @@ pyaccelerate/
 │   ├── opencl.py   # PyOpenCL helpers
 │   ├── intel.py    # Intel oneAPI helpers
 │   └── dispatch.py # Multi-GPU load balancer
+├── npu/
+│   ├── detector.py # NPU detection (Intel, Qualcomm, Apple)
+│   ├── onnx_rt.py  # ONNX Runtime inference
+│   ├── openvino.py # OpenVINO inference
+│   └── inference.py# Unified inference API
 ├── virt.py         # Virtualization detection
 ├── memory.py       # Memory monitoring & buffer pool
 ├── profiler.py     # Timing & profiling utilities
 ├── benchmark.py    # Built-in micro-benchmarks
+├── priority.py     # OS task priority & energy profiles
+├── max_mode.py     # Maximum optimization mode
 ├── engine.py       # Unified orchestrator
 └── cli.py          # Command-line interface
+```
+
+## Examples
+
+The `examples/` directory contains runnable scripts demonstrating all features:
+
+| Example | Description |
+|---|---|
+| `example_basic.py` | Engine creation, summary, submit, run_parallel, batch |
+| `example_parallel_io.py` | Parallel download/process/write with public UCI ML datasets |
+| `example_cpu_bound.py` | Sequential vs thread pool vs process pool comparison |
+| `example_max_mode.py` | MaxMode context manager, run_all, run_io, run_cpu, pipeline |
+| `example_pipeline.py` | Multi-stage data pipeline (download → analyze → report) |
+| `example_priority.py` | TaskPriority levels, EnergyProfile, presets, benchmarking |
+
+```bash
+cd examples
+python example_basic.py
+python example_max_mode.py
+python example_priority.py
 ```
 
 ## Roadmap

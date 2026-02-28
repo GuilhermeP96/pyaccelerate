@@ -11,6 +11,8 @@ Modules
 - **memory**     : Memory monitoring, pressure detection, pool allocator
 - **profiler**   : Decorator-based profiling & timing utilities
 - **benchmark**  : Built-in micro-benchmarks for the current host
+- **priority**   : OS-level task priority & energy profile management
+- **max_mode**   : Maximum optimization mode — all resources in parallel
 - **engine**     : Unified orchestrator that auto-tunes all subsystems
 
 Quick start::
@@ -19,6 +21,20 @@ Quick start::
 
     engine = Engine()          # auto-detects hardware
     print(engine.summary())    # human-readable report
+
+    # Maximum optimization mode
+    from pyaccelerate.max_mode import MaxMode
+
+    with MaxMode() as m:
+        results = m.run_all(
+            cpu_fn=cpu_task, cpu_items=cpu_data,
+            io_fn=io_task, io_items=io_data,
+        )
+
+    # OS priority control
+    from pyaccelerate.priority import max_performance, balanced
+    max_performance()   # HIGH priority + ULTRA energy
+    balanced()          # restore defaults
 
     # Use the shared virtual-thread pool
     from pyaccelerate.threads import get_pool, run_parallel
@@ -46,8 +62,22 @@ except PackageNotFoundError:
 
 # Convenience re-exports
 from pyaccelerate.engine import Engine  # noqa: E402, F401
+from pyaccelerate.max_mode import MaxMode  # noqa: E402, F401
+from pyaccelerate.priority import (  # noqa: E402, F401
+    TaskPriority,
+    EnergyProfile,
+    max_performance,
+    balanced,
+    power_saver,
+)
 
 __all__ = [
     "__version__",
     "Engine",
+    "MaxMode",
+    "TaskPriority",
+    "EnergyProfile",
+    "max_performance",
+    "balanced",
+    "power_saver",
 ]

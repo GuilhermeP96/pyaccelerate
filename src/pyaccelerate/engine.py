@@ -40,6 +40,16 @@ from pyaccelerate.threads import (
     submit as _submit,
     batch_execute,
 )
+from pyaccelerate.priority import (
+    TaskPriority,
+    EnergyProfile,
+    set_task_priority,
+    get_task_priority,
+    set_energy_profile,
+    get_energy_profile,
+    get_priority_info,
+)
+from pyaccelerate.max_mode import MaxMode as _MaxMode
 
 log = logging.getLogger("pyaccelerate.engine")
 
@@ -213,6 +223,47 @@ class Engine:
         from pyaccelerate.gpu.dispatch import dispatch
         gpus = self.usable_gpus if self.gpu_enabled else []
         return dispatch(fn, items, gpus=gpus or None, strategy=strategy)  # type: ignore[arg-type]
+
+    # ── Priority & Max Mode ──────────────────────────────────────────────
+
+    def set_priority(self, priority: TaskPriority) -> bool:
+        """Set the OS scheduling priority for the current process."""
+        return set_task_priority(priority)
+
+    def get_priority(self) -> TaskPriority:
+        """Get the current OS scheduling priority."""
+        return get_task_priority()
+
+    def set_energy(self, profile: EnergyProfile) -> bool:
+        """Set the system energy/performance profile."""
+        return set_energy_profile(profile)
+
+    def get_energy(self) -> EnergyProfile:
+        """Get the current energy/performance profile."""
+        return get_energy_profile()
+
+    def priority_info(self) -> Dict[str, str]:
+        """Get a summary of current priority and energy settings."""
+        return get_priority_info()
+
+    def max_mode(
+        self,
+        *,
+        set_priority: bool = True,
+        set_energy: bool = True,
+    ) -> _MaxMode:
+        """Return a MaxMode context manager for maximum optimization.
+
+        Usage::
+
+            engine = Engine()
+            with engine.max_mode() as m:
+                results = m.run_all(
+                    cpu_fn=cpu_task, cpu_items=cpu_data,
+                    io_fn=io_task, io_items=io_data,
+                )
+        """
+        return _MaxMode(set_priority=set_priority, set_energy=set_energy)
 
     # ── Shutdown ───────────────────────────────────────────────────────
 

@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
-keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization"]
+keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization", "priority", "energy", "max-mode"]
 dependencies = [
     "psutil>=5.9",
 ]
