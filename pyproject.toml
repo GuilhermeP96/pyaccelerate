@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pyaccelerate"
 dynamic = ["version"]
-description = "High-performance Python acceleration engine — CPU, threads, virtual threads, multi-GPU and virtualization."
+description = "High-performance Python acceleration engine — CPU, threads, virtual threads, multi-GPU, NPU and virtualization."
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.10"
@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
-keywords = ["acceleration", "gpu", "cuda", "opencl", "threads", "performance", "optimization"]
+keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization"]
 dependencies = [
     "psutil>=5.9",
 ]
@@ -37,6 +37,9 @@ cuda = ["cupy-cuda12x>=13.0"]
 opencl = ["pyopencl>=2024.1"]
 intel = ["dpctl>=0.16", "dpnp>=0.14"]
 all-gpu = ["cupy-cuda12x>=13.0", "pyopencl>=2024.1"]
+npu = ["onnxruntime>=1.18"]
+openvino = ["openvino>=2024.0"]
+npu-all = ["onnxruntime>=1.18", "openvino>=2024.0"]
 numpy = ["numpy>=1.26"]
 dev = [
     "pytest>=8.0",
@@ -99,7 +102,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["cupy.*", "pyopencl.*", "dpctl.*", "dpnp.*", "psutil.*"]
+module = ["cupy.*", "pyopencl.*", "dpctl.*", "dpnp.*", "psutil.*", "onnxruntime.*", "openvino.*", "coremltools.*", "intel_npu_acceleration_library.*"]
 ignore_missing_imports = true
 
 # ── Coverage ──────────────────────────────────────────────────────────────

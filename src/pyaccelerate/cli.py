@@ -50,6 +50,9 @@ def main(argv: list[str] | None = None) -> None:
     # virt
     sub.add_parser("virt", help="Virtualization detection")
 
+    # npu
+    sub.add_parser("npu", help="NPU detection details")
+
     # memory
     sub.add_parser("memory", help="Memory stats")
 
@@ -138,6 +141,22 @@ def main(argv: list[str] | None = None) -> None:
             print("Detected:", ", ".join(parts))
         else:
             print("No virtualization features detected.")
+        return
+
+    if args.command == "npu":
+        from pyaccelerate.npu import detect_all as detect_npus, get_install_hint as npu_hint
+        npus = detect_npus()
+        if not npus:
+            print("No NPU detected.")
+        for i, n in enumerate(npus):
+            print(f"\n[{i}] {n.short_label()}")
+            print(f"    Vendor: {n.vendor}  |  Backend: {n.backend}")
+            print(f"    TOPS: {n.tops:.1f}  |  Score: {n.score}")
+            print(f"    Driver: {n.driver_version or 'N/A'}")
+            print(f"    Usable: {n.usable}")
+        hint = npu_hint()
+        if hint:
+            print(f"\n{hint}")
         return
 
     if args.command == "memory":

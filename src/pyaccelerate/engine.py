@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 from pyaccelerate.cpu import CPUInfo, detect as detect_cpu, recommend_workers
 from pyaccelerate.gpu import GPUDevice, detect_all as detect_gpus, gpu_available, best_gpu, get_install_hint
+from pyaccelerate.npu import NPUDevice, detect_all as detect_npus, npu_available, best_npu, get_install_hint as npu_install_hint
 from pyaccelerate.virt import VirtInfo, detect as detect_virt
 from pyaccelerate.memory import Pressure, get_pressure, get_stats as mem_stats, clamp_workers
 from pyaccelerate.threads import (
@@ -69,6 +70,7 @@ class Engine:
         *,
         gpu_enabled: bool = True,
         multi_gpu: bool = True,
+        npu_enabled: bool = True,
         virt_enabled: bool = True,
         auto_threads: bool = True,
         max_io_workers: int = 0,
@@ -76,12 +78,14 @@ class Engine:
     ):
         self.gpu_enabled = gpu_enabled
         self.multi_gpu = multi_gpu
+        self.npu_enabled = npu_enabled
         self.virt_enabled = virt_enabled
         self.auto_threads = auto_threads
 
         # Eager detection
         self._cpu: CPUInfo = detect_cpu()
         self._gpus: List[GPUDevice] = detect_gpus() if gpu_enabled else []
+        self._npus: List[NPUDevice] = detect_npus() if npu_enabled else []
         self._virt: VirtInfo = detect_virt() if virt_enabled else VirtInfo()
 
         # Thread pool sizes
@@ -121,6 +125,19 @@ class Engine:
         return usable[0] if usable else None
 
     @property
+    def npus(self) -> List[NPUDevice]:
+        return self._npus
+
+    @property
+    def usable_npus(self) -> List[NPUDevice]:
+        return [n for n in self._npus if n.usable]
+
+    @property
+    def best_npu(self) -> Optional[NPUDevice]:
+        usable = self.usable_npus
+        return usable[0] if usable else None
+
+    @property
     def virt(self) -> VirtInfo:
         return self._virt
 
@@ -145,6 +162,11 @@ class Engine:
 
     def set_multi_gpu(self, on: bool) -> None:
         self.multi_gpu = on
+
+    def set_npu_enabled(self, on: bool) -> None:
+        self.npu_enabled = on
+        if on and not self._npus:
+            self._npus = detect_npus()
 
     # ── Task submission ──────────────────────────────────────────────────
 
@@ -239,6 +261,20 @@ class Engine:
             else:
                 lines.append("║  GPU: None detected")
 
+        # NPU
+        usable_n = self.usable_npus
+        if usable_n and self.npu_enabled:
+            best_n = usable_n[0]
+            lines.append(f"║  NPU: {best_n.short_label()}")
+        elif self._npus:
+            n0 = self._npus[0]
+            lines.append(f"║  NPU: {n0.name} (no compute framework)")
+            hint_n = npu_install_hint()
+            if hint_n:
+                lines.append(f"║       Hint: {hint_n}")
+        else:
+            lines.append("║  NPU: None detected")
+
         # Memory
         ms = mem_stats()
         if "system_total_gb" in ms:
@@ -282,6 +318,13 @@ class Engine:
         else:
             parts.append("GPU: N/A")
 
+        # NPU
+        usable_n = self.usable_npus
+        if usable_n and self.npu_enabled:
+            parts.append(f"NPU: {usable_n[0].name}")
+        else:
+            parts.append("NPU: N/A")
+
         # Memory pressure
         parts.append(f"MEM: {self.memory_pressure.name}")
 
@@ -308,6 +351,11 @@ class Engine:
                 "multi_gpu": self.multi_gpu,
                 "devices": [g.as_dict() for g in self._gpus],
                 "best": self.best_gpu.as_dict() if self.best_gpu else None,
+            },
+            "npu": {
+                "enabled": self.npu_enabled,
+                "devices": [n.as_dict() for n in self._npus],
+                "best": self.best_npu.as_dict() if self.best_npu else None,
             },
             "memory": mem_stats(),
             "memory_pressure": self.memory_pressure.name,

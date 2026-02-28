@@ -6,6 +6,7 @@ Modules
 - **cpu**        : CPU detection, core count, frequency, affinity, NUMA topology
 - **threads**    : Virtual thread pool, sliding-window executor, async bridge
 - **gpu**        : Multi-vendor GPU detection, ranking, dispatch (CUDA/OpenCL/Intel)
+- **npu**        : NPU detection & inference (OpenVINO, ONNX Runtime, DirectML, CoreML)
 - **virt**       : Virtualization detection (Hyper-V, VT-x/AMD-V, WSL2, Docker)
 - **memory**     : Memory monitoring, pressure detection, pool allocator
 - **profiler**   : Decorator-based profiling & timing utilities
