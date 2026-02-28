@@ -14,6 +14,7 @@ Modules
 - **priority**   : OS-level task priority & energy profile management
 - **max_mode**   : Maximum optimization mode — all resources in parallel
 - **android**    : Android/Termux platform detection, ARM SoC database, thermal/battery
+- **iot**        : IoT / SBC detection (Raspberry Pi, Jetson, BeagleBone, Coral, Hailo)
 - **engine**     : Unified orchestrator that auto-tunes all subsystems
 
 Quick start::

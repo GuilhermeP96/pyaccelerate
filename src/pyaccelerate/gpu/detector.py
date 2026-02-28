@@ -122,6 +122,13 @@ def _vendor_from_name(name: str) -> Tuple[str, bool]:
         return "Imagination", False
     if any(k in nl for k in ("maleoon",)):
         return "HiSilicon", False
+    # SBC / IoT GPUs
+    if any(k in nl for k in ("videocore", "vc4", "v3d")):
+        return "Broadcom", False
+    if any(k in nl for k in ("tegra", "jetson")):
+        return "NVIDIA", False
+    if any(k in nl for k in ("vivante", "galcore", "gc7000", "gc nano")):
+        return "Vivante", False
     return "unknown", False
 
 
@@ -155,6 +162,9 @@ def detect_all() -> List[GPUDevice]:
 
         # ── ARM / Android GPU ──
         gpus.extend(_probe_arm_gpu(seen))
+
+        # ── SBC / IoT GPU (VideoCore, Tegra, Vivante, etc.) ──
+        gpus.extend(_probe_sbc_gpu(seen))
 
         # ── OS-level fallback ──
         if not gpus:
@@ -280,9 +290,10 @@ def _probe_arm_gpu(seen: set[str]) -> List[GPUDevice]:
 
     Uses:
       1. SoC database from android.py (reliable)
-      2. Android sysfs: /sys/class/kgsl (Adreno), /sys/class/misc/mali0 (Mali)
-      3. Vulkan via ``vulkaninfo`` (if installed in Termux)
-      4. OpenCL already catches ARM GPUs in _probe_opencl
+      2. SBC / IoT database (Raspberry Pi VideoCore, Jetson Tegra, etc.)
+      3. Android sysfs: /sys/class/kgsl (Adreno), /sys/class/misc/mali0 (Mali)
+      4. Vulkan via ``vulkaninfo`` (if installed in Termux)
+      5. OpenCL already catches ARM GPUs in _probe_opencl
     """
     gpus: List[GPUDevice] = []
 
@@ -393,6 +404,80 @@ def _probe_arm_gpu(seen: set[str]) -> List[GPUDevice]:
     return gpus
 
 
+def _probe_sbc_gpu(seen: set[str]) -> List[GPUDevice]:
+    """Detect SBC / IoT GPUs (VideoCore, Tegra CUDA, Vivante, etc.).
+
+    Sources:
+      1. SBC database from iot.py (board model → SoC → GPU name)
+      2. Jetson Tegra — already found via CUDA probe, but add fallback
+      3. VideoCore (Raspberry Pi) via /dev/vchiq or vcgencmd
+      4. Vivante (NXP i.MX) via /dev/galcore
+    """
+    gpus: List[GPUDevice] = []
+
+    try:
+        from pyaccelerate.iot import is_sbc, detect_sbc, is_jetson
+    except ImportError:
+        return gpus
+
+    if not is_sbc():
+        return gpus
+
+    sbc = detect_sbc()
+    if not sbc or not sbc.gpu_name:
+        return gpus
+
+    key = sbc.gpu_name.lower().strip()
+    if key in seen:
+        return gpus
+
+    vendor = sbc.soc_vendor
+    cuda_cores = sbc.gpu_cuda_cores
+    backend = "none"
+
+    # Jetson: CUDA is handled by _probe_cuda, but mark as cuda if available
+    if sbc.family == "jetson" and cuda_cores > 0:
+        try:
+            import cupy  # type: ignore[import-untyped]
+            backend = "cuda"
+        except ImportError:
+            pass
+
+    # VideoCore: check for vcgencmd
+    if "videocore" in key:
+        vendor = "Broadcom"
+        try:
+            from pathlib import Path
+            if Path("/dev/vchiq").exists():
+                backend = "videocore"
+        except Exception:
+            pass
+
+    # Vivante (NXP i.MX): check for galcore driver
+    if "vivante" in key:
+        vendor = "Vivante"
+        try:
+            from pathlib import Path
+            if Path("/dev/galcore").exists():
+                backend = "vivante"
+        except Exception:
+            pass
+
+    gpu = GPUDevice(
+        name=sbc.gpu_name,
+        backend=backend,
+        vendor=vendor,
+        compute_units=cuda_cores,
+        is_discrete=False,
+    )
+    # Try OpenCL upgrade
+    gpu = _try_arm_opencl_upgrade(gpu) or gpu
+    gpus.append(gpu)
+    seen.add(key)
+
+    return gpus
+
+
 def _try_arm_opencl_upgrade(gpu: GPUDevice) -> Optional[GPUDevice]:
     """Try to upgrade an ARM GPU from 'none' to 'opencl' backend."""
     try:
@@ -427,7 +512,8 @@ def _gpu_names_match(name_a: str, name_b: str) -> bool:
     if a in b or b in a:
         return True
     # Check key identifiers (e.g., "adreno 750" vs "Qualcomm Adreno 750")
-    for token in ("adreno", "mali", "immortalis", "xclipse", "powervr", "maleoon"):
+    for token in ("adreno", "mali", "immortalis", "xclipse", "powervr", "maleoon",
+                   "videocore", "tegra", "vivante"):
         if token in a and token in b:
             return True
     return False
@@ -556,6 +642,14 @@ def get_install_hint() -> str:
         vl = g.vendor.lower()
         if vl in ("qualcomm", "arm", "samsung", "imagination", "hisilicon"):
             hints.append("pip install pyopencl  # ARM OpenCL")
+    # SBC / IoT GPUs
+    for g in gpus:
+        vl = g.vendor.lower()
+        nl = g.name.lower()
+        if "broadcom" in vl or "videocore" in nl:
+            hints.append("pip install pyopencl  # VideoCore OpenCL (RPi)")
+        elif "vivante" in vl or "vivante" in nl:
+            hints.append("pip install pyopencl  # Vivante OpenCL (i.MX)")
     if hints:
         return "Install GPU support:  " + "  or  ".join(sorted(set(hints)))
     return ""

@@ -160,6 +160,39 @@ _KNOWN_TOPS: Dict[str, float] = {
     "m4": 38.0,
     "m4 pro": 38.0,
     "m4 max": 38.0,
+    # ── IoT / SBC ──
+    # NVIDIA Jetson
+    "jetson agx orin": 275.0,
+    "jetson orin nx": 100.0,
+    "jetson orin nano": 40.0,
+    "jetson agx xavier": 32.0,
+    "jetson xavier nx": 21.0,
+    "tegra orin": 100.0,
+    "tegra xavier": 32.0,
+    # Google Coral Edge TPU
+    "coral edge tpu": 4.0,
+    "coral usb accelerator": 4.0,
+    "edge tpu": 4.0,
+    # Hailo
+    "hailo-8": 26.0,
+    "hailo-8l": 13.0,
+    "hailo npu": 26.0,
+    # Intel Movidius
+    "movidius": 1.0,
+    "ncs2": 1.0,
+    "myriad x": 1.0,
+    # Rockchip NPU
+    "rk3588": 6.0,
+    "rk3588s": 6.0,
+    "rk3568": 1.0,
+    "rk3566": 0.8,
+    "rockchip npu": 6.0,
+    # NXP Ethos
+    "ethos npu": 2.3,
+    "imx8mp": 2.3,
+    # Amlogic
+    "a311d": 5.0,
+    "amlogic npu": 5.0,
 }
 
 
@@ -193,6 +226,21 @@ def _vendor_from_name(name: str) -> str:
         return "HiSilicon"
     if any(k in nl for k in ("unisoc",)):
         return "Unisoc"
+    # IoT / SBC vendors
+    if any(k in nl for k in ("nvidia", "jetson", "tegra", "dla")):
+        return "NVIDIA"
+    if any(k in nl for k in ("coral", "edge tpu", "edgetpu")):
+        return "Google"
+    if any(k in nl for k in ("hailo",)):
+        return "Hailo"
+    if any(k in nl for k in ("movidius", "myriad", "ncs")):
+        return "Intel"
+    if any(k in nl for k in ("rockchip", "rk3588", "rk3568", "rk3566", "rknn")):
+        return "Rockchip"
+    if any(k in nl for k in ("amlogic", "a311d")):
+        return "Amlogic"
+    if any(k in nl for k in ("nxp", "imx", "ethos")):
+        return "NXP"
     return "unknown"
 
 
@@ -243,7 +291,10 @@ def detect_all() -> List[NPUDevice]:
         # 4. ARM / Android NPU (mobile SoCs)
         npus.extend(_probe_arm_npu(seen))
 
-        # 5. OS-level fallback
+        # 5. SBC / IoT NPU (Jetson DLA, Coral Edge TPU, Hailo, Rockchip NPU)
+        npus.extend(_probe_sbc_npu(seen))
+
+        # 6. OS-level fallback
         if not npus:
             npus.extend(_probe_os_level(seen))
 
@@ -472,6 +523,136 @@ def _probe_arm_npu(seen: set[str]) -> List[NPUDevice]:
                         seen.add(key)
         except Exception:
             pass
+
+    return npus
+
+
+def _probe_sbc_npu(seen: set[str]) -> List[NPUDevice]:
+    """Detect IoT / SBC NPU accelerators.
+
+    Sources:
+      1. SBC database from iot.py (Jetson DLA, Rockchip NPU, Amlogic NPU, etc.)
+      2. Google Coral Edge TPU (USB / PCIe)
+      3. Intel Movidius NCS2 (USB)
+      4. Hailo-8 / Hailo-8L
+    """
+    npus: List[NPUDevice] = []
+
+    # ── SBC database NPU ──
+    try:
+        from pyaccelerate.iot import is_sbc, detect_sbc
+        if is_sbc():
+            sbc = detect_sbc()
+            if sbc and sbc.npu_name and sbc.npu_tops > 0:
+                key = sbc.npu_name.lower().strip()
+                if key not in seen:
+                    vendor = sbc.soc_vendor
+                    backend = "none"
+                    # Jetson DLA — check TensorRT
+                    if "jetson" in sbc.family:
+                        try:
+                            import tensorrt  # type: ignore[import-untyped]
+                            backend = "tensorrt"
+                        except ImportError:
+                            pass
+                    # Rockchip NPU — check rknn
+                    if "rockchip" in vendor.lower():
+                        try:
+                            import rknn  # type: ignore[import-untyped]
+                            backend = "rknn"
+                        except ImportError:
+                            pass
+                    npus.append(NPUDevice(
+                        name=f"{sbc.npu_name} ({sbc.soc_name})",
+                        vendor=vendor,
+                        backend=backend,
+                        tops=sbc.npu_tops,
+                    ))
+                    seen.add(key)
+    except ImportError:
+        pass
+
+    # ── Google Coral Edge TPU ──
+    try:
+        from pyaccelerate.iot import detect_coral_tpu
+        coral = detect_coral_tpu()
+        if coral:
+            key = coral["name"].lower().strip()
+            if key not in seen:
+                backend = "edgetpu" if coral.get("runtime") == "yes" else "none"
+                npus.append(NPUDevice(
+                    name=coral["name"],
+                    vendor="Google",
+                    backend=backend,
+                    tops=float(coral.get("tops", 4.0)),
+                ))
+                seen.add(key)
+    except ImportError:
+        pass
+
+    # ── Intel Movidius NCS2 ──
+    try:
+        from pathlib import Path
+        r = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if "03e7:2485" in line:  # Movidius Myriad X VPU ID
+                    key = "intel movidius ncs2"
+                    if key not in seen:
+                        backend = "none"
+                        try:
+                            from openvino import Core  # type: ignore[import-untyped]
+                            core = Core()
+                            if "MYRIAD" in core.available_devices:
+                                backend = "openvino"
+                        except Exception:
+                            pass
+                        npus.append(NPUDevice(
+                            name="Intel Movidius NCS2",
+                            vendor="Intel",
+                            backend=backend,
+                            tops=1.0,
+                        ))
+                        seen.add(key)
+                    break
+    except Exception:
+        pass
+
+    # ── Hailo-8 / Hailo-8L ──
+    try:
+        from pathlib import Path
+        hailo_dev = Path("/dev/hailo0")
+        if hailo_dev.exists():
+            key = "hailo npu"
+            if key not in seen:
+                backend = "none"
+                try:
+                    import hailo_platform  # type: ignore[import-untyped]
+                    backend = "hailo"
+                except ImportError:
+                    pass
+                # Hailo-8 = 26 TOPS, Hailo-8L = 13 TOPS
+                tops = 26.0
+                try:
+                    # Check sysfs for model variant
+                    for entry in Path("/sys/class/hailo_chardev").iterdir():
+                        try:
+                            board_name = (entry / "board_name").read_text().strip().lower()
+                            if "8l" in board_name:
+                                tops = 13.0
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                npus.append(NPUDevice(
+                    name="Hailo-8 NPU",
+                    vendor="Hailo",
+                    backend=backend,
+                    tops=tops,
+                ))
+                seen.add(key)
+    except Exception:
+        pass
 
     return npus
 
@@ -726,6 +907,15 @@ def get_install_hint() -> str:
             hints.append("pip install coremltools")
         elif "mediatek" in vl or "samsung" in vl or "google" in vl or "hisilicon" in vl:
             hints.append("pip install tflite-runtime  # Android NNAPI")
+        # IoT / SBC NPUs
+        elif "nvidia" in vl or "jetson" in vl:
+            hints.append("pip install tensorrt  # Jetson DLA/CUDA")
+        elif "hailo" in vl:
+            hints.append("pip install hailo-platform  # Hailo-8")
+        elif "rockchip" in vl:
+            hints.append("pip install rknn-toolkit2  # Rockchip NPU")
+        elif "google" in vl and "coral" in n.name.lower():
+            hints.append("pip install pycoral  # Google Coral Edge TPU")
         else:
             hints.append("pip install onnxruntime-directml")
 

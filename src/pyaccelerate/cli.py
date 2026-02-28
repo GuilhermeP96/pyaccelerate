@@ -56,6 +56,9 @@ def main(argv: list[str] | None = None) -> None:
     # android
     sub.add_parser("android", help="Android/ARM device details")
 
+    # iot
+    sub.add_parser("iot", help="IoT / SBC board details")
+
     # memory
     sub.add_parser("memory", help="Memory stats")
 
@@ -230,6 +233,82 @@ def main(argv: list[str] | None = None) -> None:
             print(f"\n── Battery ──")
             for k, v in batt.items():
                 print(f"  {k}: {v}")
+        return
+
+    if args.command == "iot":
+        from pyaccelerate.iot import (
+            is_sbc, detect_sbc, is_micropython, is_circuitpython,
+            is_jetson, is_raspberry_pi, recommend_iot_workers,
+            get_sbc_thermal, get_jetson_power_modes, detect_coral_tpu,
+        )
+        if not is_sbc():
+            print("Not running on a known SBC / IoT board.")
+            return
+
+        sbc = detect_sbc()
+        if not sbc:
+            print("SBC detected but details unavailable.")
+            return
+
+        print(f"Board:       {sbc.board_name}")
+        print(f"Family:      {sbc.family}")
+        print(f"SoC:         {sbc.soc_name} ({sbc.soc_vendor})")
+        print(f"CPU:         {sbc.cpu_arch} × {sbc.cpu_cores} @ {sbc.cpu_max_mhz:.0f} MHz")
+        print(f"RAM:         {sbc.ram_mb} MB")
+        print(f"GPU:         {sbc.gpu_name}")
+        if sbc.gpu_cuda_cores:
+            print(f"             CUDA cores: {sbc.gpu_cuda_cores}")
+        if sbc.npu_name:
+            print(f"NPU:         {sbc.npu_name} ({sbc.npu_tops:.1f} TOPS)")
+        print(f"Process:     {sbc.process_nm} nm")
+
+        print(f"\n── Peripherals ──")
+        print(f"  GPIO:       {'yes' if sbc.has_gpio else 'no'} ({sbc.gpio_pins} pins)")
+        print(f"  PCIe:       {'yes' if sbc.has_pcie else 'no'}")
+        print(f"  WiFi:       {'yes' if sbc.has_wifi else 'no'}")
+        print(f"  Bluetooth:  {'yes' if sbc.has_bluetooth else 'no'}")
+        print(f"  Ethernet:   {'yes' if sbc.has_ethernet else 'no'}")
+        print(f"  USB ports:  {sbc.usb_ports}")
+        print(f"  Camera CSI: {'yes' if sbc.has_camera_csi else 'no'}")
+        print(f"  Display DSI:{'yes' if sbc.has_display_dsi else 'no'}")
+        print(f"  Storage:    {sbc.storage_type or 'N/A'}")
+        print(f"  Fan:        {'yes' if sbc.has_fan else 'no'}")
+
+        # Jetson extras
+        if sbc.family == "jetson":
+            print(f"\n── NVIDIA Jetson ──")
+            print(f"  L4T:        {sbc.jetson_l4t_version or 'N/A'}")
+            print(f"  Power mode: {sbc.jetson_power_mode or 'N/A'}")
+            modes = get_jetson_power_modes()
+            if modes:
+                print(f"  Available modes:")
+                for m in modes:
+                    active = " ← active" if m["active"] == "yes" else ""
+                    print(f"    [{m['id']}] {m['name']}{active}")
+
+        # Coral Edge TPU
+        coral = detect_coral_tpu()
+        if coral:
+            print(f"\n── Google Coral ──")
+            print(f"  Type:    {coral['type']}")
+            print(f"  Name:    {coral['name']}")
+            print(f"  TOPS:    {coral['tops']}")
+            print(f"  Runtime: {coral['runtime']}")
+
+        # Thermal
+        thermal = get_sbc_thermal()
+        if thermal.get("cpu_temp_c") is not None:
+            print(f"\n── Thermal ──")
+            print(f"  CPU:    {thermal['cpu_temp_c']:.1f}°C")
+            if thermal.get("gpu_temp_c") is not None:
+                print(f"  GPU:    {thermal['gpu_temp_c']:.1f}°C")
+            print(f"  Status: {thermal['recommendation']}")
+            if thermal.get("fan_rpm") is not None:
+                print(f"  Fan:    {thermal['fan_rpm']} RPM")
+
+        print(f"\n── Workers ──")
+        print(f"  Recommended (CPU-bound): {recommend_iot_workers(io_bound=False)}")
+        print(f"  Recommended (IO-bound):  {recommend_iot_workers(io_bound=True)}")
         return
 
     if args.command == "virt":

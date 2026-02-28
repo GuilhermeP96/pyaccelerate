@@ -44,6 +44,7 @@ class CPUInfo:
     arm_clusters: Dict[str, List[int]] = field(default_factory=dict)  # big.LITTLE
     soc_name: str = ""                     # SoC name on ARM devices
     is_android: bool = False               # Running on Android / Termux
+    is_sbc: bool = False                   # Running on a Single-Board Computer
 
     @property
     def has_avx(self) -> bool:
@@ -179,6 +180,14 @@ def detect() -> CPUInfo:
         per_node = logical // max(numa_nodes, 1)
         cores_per_numa = [per_node] * numa_nodes
 
+    # ── SBC / IoT detection ──
+    _is_sbc = False
+    try:
+        from pyaccelerate.iot import is_sbc as _check_sbc
+        _is_sbc = _check_sbc()
+    except ImportError:
+        pass
+
     info = CPUInfo(
         arch=arch,
         brand=brand,
@@ -193,6 +202,7 @@ def detect() -> CPUInfo:
         arm_clusters=arm_clusters,
         soc_name=soc_name,
         is_android=_is_android_flag,
+        is_sbc=_is_sbc,
     )
     _cached_info = info
     log.info("CPU: %s", info.short_label())
@@ -420,9 +430,20 @@ def recommend_workers(
 
     On ARM Android devices with big.LITTLE, CPU-bound work defaults to the
     count of **performance** (big) cores only to avoid thermal throttling.
+
+    On SBC / IoT devices with limited RAM, the count is further clamped
+    using ``iot.recommend_iot_workers()``.
     """
     info = detect()
     ram_gb = _get_ram_gb()
+
+    # SBC / IoT: use memory-aware recommendation
+    if info.is_sbc:
+        try:
+            from pyaccelerate.iot import recommend_iot_workers
+            return max(1, recommend_iot_workers(io_bound=io_bound))
+        except ImportError:
+            pass
 
     if io_bound:
         n = min(info.logical_cores * 3, 32)

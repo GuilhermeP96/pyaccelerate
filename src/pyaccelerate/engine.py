@@ -377,6 +377,41 @@ class Engine:
             except Exception:
                 lines.append("║  Platform: Android")
 
+        # SBC / IoT
+        if c.is_sbc:
+            try:
+                from pyaccelerate.iot import detect_sbc, get_sbc_thermal, recommend_iot_workers
+                sbc = detect_sbc()
+                if sbc:
+                    sbc_parts = [f"Board: {sbc.board_name}"]
+                    if sbc.soc_name:
+                        sbc_parts.append(f"SoC: {sbc.soc_name}")
+                    if sbc.ram_mb:
+                        sbc_parts.append(f"RAM: {sbc.ram_mb} MB")
+                    lines.append(f"║  SBC: {' | '.join(sbc_parts)}")
+                    periph_parts = []
+                    if sbc.has_gpio:
+                        periph_parts.append(f"GPIO({sbc.gpio_pins})")
+                    if sbc.has_pcie:
+                        periph_parts.append("PCIe")
+                    if sbc.has_wifi:
+                        periph_parts.append("WiFi")
+                    if sbc.storage_type:
+                        periph_parts.append(sbc.storage_type)
+                    if periph_parts:
+                        lines.append(f"║       Peripherals: {', '.join(periph_parts)}")
+                    if sbc.family == "jetson" and sbc.jetson_power_mode:
+                        lines.append(f"║       Jetson: Power={sbc.jetson_power_mode} | L4T={sbc.jetson_l4t_version or 'N/A'}")
+                    thermal = get_sbc_thermal()
+                    if thermal.get("cpu_temp_c") is not None:
+                        temp_str = f"{thermal['cpu_temp_c']:.1f}°C"
+                        rec = thermal.get("recommendation", "normal")
+                        fan = f" | Fan: {thermal['fan_rpm']} RPM" if thermal.get("fan_rpm") else ""
+                        lines.append(f"║       Thermal: {temp_str} ({rec}){fan}")
+                    lines.append(f"║       IoT workers: {recommend_iot_workers()}")
+            except Exception:
+                lines.append("║  SBC: detected (details unavailable)")
+
         lines.append("╚══════════════════════════════════════════════════════════════╝")
         return "\n".join(lines)
 
@@ -429,6 +464,7 @@ class Engine:
                 "arm_clusters": {k: v for k, v in self._cpu.arm_clusters.items()} if self._cpu.arm_clusters else {},
                 "soc_name": self._cpu.soc_name,
                 "is_android": self._cpu.is_android,
+                "is_sbc": self._cpu.is_sbc,
             },
             "gpu": {
                 "enabled": self.gpu_enabled,
@@ -455,4 +491,15 @@ class Engine:
                 "io_workers": self._io_workers,
                 "cpu_workers": self._cpu_workers,
             },
+            "iot": self._iot_dict(),
         }
+
+    def _iot_dict(self) -> Dict[str, Any]:
+        """IoT/SBC section for as_dict()."""
+        if not self._cpu.is_sbc:
+            return {"is_sbc": False}
+        try:
+            from pyaccelerate.iot import get_sbc_summary
+            return get_sbc_summary()
+        except ImportError:
+            return {"is_sbc": True, "error": "iot module not available"}
