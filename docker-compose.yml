@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  # Standard CPU-only image
+  pyaccelerate:
+    build: .
+    container_name: pyaccelerate
+    command: ["info"]
+
+  # Development with source mounted
+  dev:
+    build: .
+    container_name: pyaccelerate-dev
+    volumes:
+      - ./src:/app/src:ro
+    entrypoint: ["python", "-m", "pyaccelerate.cli"]
+    command: ["info"]
+
+  # NVIDIA GPU-enabled (requires nvidia-container-toolkit)
+  gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: pyaccelerate-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["info"]

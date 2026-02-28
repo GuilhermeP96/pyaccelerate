@@ -1,0 +1,23 @@
+# ── GPU-enabled image (NVIDIA CUDA) ──────────────────────────────────────
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY pyproject.toml VERSION README.md LICENSE ./
+COPY src/ src/
+
+RUN pip3 install --no-cache-dir build \
+    && python3 -m build --wheel --outdir /dist \
+    && pip3 install --no-cache-dir /dist/*.whl "cupy-cuda12x>=13.0" \
+    && rm -rf /dist /build
+
+WORKDIR /app
+
+ENTRYPOINT ["pyaccelerate"]
+CMD ["info"]
