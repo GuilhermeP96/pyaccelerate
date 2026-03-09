@@ -144,7 +144,18 @@ def run_memory_bandwidth(
     iterations: int = 10,
 ) -> Dict[str, Any]:
     """Measure sequential memory read/write bandwidth."""
+    if iterations <= 0:
+        return {
+            "benchmark": "memory_bandwidth",
+            "size_mb": size_mb,
+            "iterations": 0,
+            "write_gbps": 0,
+            "read_gbps": 0,
+            "error": "iterations must be > 0",
+        }
+
     size = size_mb * 1024 * 1024
+    buf = bytearray(size)
 
     # Write
     t0 = time.perf_counter()

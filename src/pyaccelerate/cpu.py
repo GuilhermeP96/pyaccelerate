@@ -373,8 +373,11 @@ def _parse_cpulist_count(cpulist: str) -> int:
     for part in cpulist.split(","):
         part = part.strip()
         if "-" in part:
-            lo, hi = part.split("-", 1)
-            total += int(hi) - int(lo) + 1
+            try:
+                lo, hi = part.split("-", 1)
+                total += int(hi) - int(lo) + 1
+            except ValueError:
+                continue
         elif part.isdigit():
             total += 1
     return total

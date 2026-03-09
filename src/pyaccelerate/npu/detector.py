@@ -494,7 +494,10 @@ def _probe_arm_npu(seen: set[str]) -> List[NPUDevice]:
             r = sp.run(["getprop", "ro.build.version.sdk"],
                        capture_output=True, text=True, timeout=3)
             if r.returncode == 0:
-                sdk = int(r.stdout.strip())
+                try:
+                    sdk = int(r.stdout.strip())
+                except ValueError:
+                    sdk = 0
                 if sdk >= 27:  # Android 8.1
                     key = "android-nnapi"
                     if key not in seen:

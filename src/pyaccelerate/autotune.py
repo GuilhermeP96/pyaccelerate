@@ -129,7 +129,9 @@ def _cpu_score(single_ops: int, multi_ops: int) -> int:
 def _memory_score(write_gbps: float, read_gbps: float) -> int:
     """0-100 score based on bandwidth.  ~50 GB/s DDR5 ≈ 90."""
     avg = (write_gbps + read_gbps) / 2
-    return min(100, int(avg / 0.5))  # 50 GB/s → 100
+    if avg <= 0:
+        return 0
+    return min(100, int(avg / 0.556))  # 50 GB/s → ~90
 
 
 def _gpu_score(gflops: float) -> int:

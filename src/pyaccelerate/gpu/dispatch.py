@@ -130,22 +130,37 @@ def dispatch(
     buckets = _assign_items(items, gpus, strategy)
     total_workers = max(1, max_workers_per_gpu * len(gpus))
 
-    # Map item → original index for ordered results
-    item_to_index: Dict[int, int] = {id(item): i for i, item in enumerate(items)}
+    # Map item → original index using enumerated buckets
     results: List[Any] = [None] * len(items)
     lock = threading.Lock()
 
-    def _worker(item: Any, gpu: GPUDevice) -> tuple[int, T]:
-        idx = item_to_index[id(item)]
+    # Build a flat list of (original_index, item, gpu) for dispatch
+    _work_queue: List[tuple[int, Any, GPUDevice]] = []
+    item_idx = 0
+    bucket_offsets: List[List[int]] = []
+    for gi, bucket in enumerate(buckets):
+        offsets = []
+        for _item in bucket:
+            offsets.append(item_idx)
+            item_idx += 1
+        bucket_offsets.append(offsets)
+
+    # Re-walk items in order to build dispatch with correct original index
+    idx_iter = iter(range(len(items)))
+    for gi, bucket in enumerate(buckets):
+        gpu = gpus[gi]
+        for item in bucket:
+            orig_idx = next(idx_iter)
+            _work_queue.append((orig_idx, item, gpu))
+
+    def _worker(orig_idx: int, item: Any, gpu: GPUDevice) -> tuple[int, Any]:
         result = fn(item, gpu)
-        return idx, result
+        return orig_idx, result
 
     with ThreadPoolExecutor(max_workers=total_workers) as pool:
         futures: List[Future] = []
-        for gi, bucket in enumerate(buckets):
-            gpu = gpus[gi]
-            for item in bucket:
-                futures.append(pool.submit(_worker, item, gpu))
+        for orig_idx, item, gpu in _work_queue:
+            futures.append(pool.submit(_worker, orig_idx, item, gpu))
 
         for fut in as_completed(futures):
             try:

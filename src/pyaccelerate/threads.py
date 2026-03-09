@@ -266,17 +266,6 @@ def run_parallel_collect(
     Returns a list of ``(args, result_or_exception)`` in completion order.
     """
     results: List[Tuple[tuple, T | Exception]] = []
-    lock = threading.Lock()
-
-    def _collect(fut: Future) -> None:
-        nonlocal results
-        # We need the args — traverse through active map
-        try:
-            val = fut.result()
-        except Exception as exc:
-            val = exc  # type: ignore[assignment]
-        with lock:
-            results.append(((), val))
 
     # Use direct approach for ordered results
     pool = get_pool()

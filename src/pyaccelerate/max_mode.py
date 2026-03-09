@@ -399,40 +399,53 @@ class MaxMode:
             ``{"cpu": [...], "io": [...], "gpu": [...], "elapsed_s": float}``
         """
         results: Dict[str, Any] = {}
+        errors: List[tuple[str, Exception]] = []
         threads: List[threading.Thread] = []
         t0 = time.perf_counter()
 
+        def _safe_run(name: str, target: Callable[[], Any]) -> None:
+            try:
+                results[name] = target()
+            except Exception as exc:
+                log.warning("%s workload failed: %s", name, exc)
+                errors.append((name, exc))
+                results[name] = None
+
         # CPU workload (in background thread that uses process pool)
         if cpu_fn and cpu_items:
-            def _run_cpu() -> None:
-                results["cpu"] = self.run_cpu(
-                    cpu_fn, cpu_items,
-                )
-            t = threading.Thread(target=_run_cpu, name="maxmode-cpu")
+            t = threading.Thread(
+                target=_safe_run,
+                args=("cpu", lambda: self.run_cpu(cpu_fn, cpu_items)),
+                name="maxmode-cpu",
+            )
             threads.append(t)
             t.start()
 
         # I/O workload (in background thread that uses I/O pool)
         if io_fn and io_items:
-            def _run_io() -> None:
-                results["io"] = self.run_io(
-                    io_fn, io_items, show_progress=False,
-                )
-            t = threading.Thread(target=_run_io, name="maxmode-io")
+            t = threading.Thread(
+                target=_safe_run,
+                args=("io", lambda: self.run_io(io_fn, io_items, show_progress=False)),
+                name="maxmode-io",
+            )
             threads.append(t)
             t.start()
 
         # GPU workload (in background thread)
         if gpu_fn and gpu_items:
-            def _run_gpu() -> None:
+            def _gpu_work() -> list:
                 from pyaccelerate.gpu.dispatch import dispatch
                 gpus = detect_gpus()
                 usable = [g for g in gpus if g.usable]
                 if usable:
-                    results["gpu"] = dispatch(gpu_fn, gpu_items, gpus=usable)
+                    return dispatch(gpu_fn, gpu_items, gpus=usable)
                 else:
-                    results["gpu"] = [gpu_fn(item) for item in gpu_items]
-            t = threading.Thread(target=_run_gpu, name="maxmode-gpu")
+                    return [gpu_fn(item) for item in gpu_items]
+            t = threading.Thread(
+                target=_safe_run,
+                args=("gpu", _gpu_work),
+                name="maxmode-gpu",
+            )
             threads.append(t)
             t.start()
 
@@ -441,6 +454,8 @@ class MaxMode:
             t.join()
 
         results["elapsed_s"] = round(time.perf_counter() - t0, 4)
+        if errors:
+            results["errors"] = {name: str(exc) for name, exc in errors}
 
         log.info("MaxMode.run_all completed in %.3f s", results["elapsed_s"])
         return results
