@@ -14,6 +14,10 @@
 |---|---|
 | **`cpu`** | CPU detection, topology, NUMA, affinity, ISA flags, ARM big.LITTLE/DynamIQ, dynamic worker recommendations |
 | **`threads`** | Persistent virtual-thread pool, sliding-window executor, async bridge, process pool |
+| **`work_stealing`** | Work-stealing scheduler (Tokio / Go runtime / ForkJoinPool style) — Chase-Lev deques, random victim selection |
+| **`lockfree_queue`** | Lock-free MPMC queue & per-worker Chase-Lev deques for minimal contention |
+| **`adaptive`** | Adaptive scheduler — auto-scales workers based on latency, CPU pressure & memory pressure |
+| **`_native`** | Optional Cython / Rust (PyO3) accelerators for hot-path data structures |
 | **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI, ARM Adreno/Mali/Immortalis), ranking, multi-GPU dispatch |
 | **`npu`** | NPU detection & inference (OpenVINO, ONNX Runtime, DirectML, CoreML, ARM Hexagon/Samsung NPU/Tensor TPU/MediaTek APU) |
 | **`virt`** | Virtualization detection (Hyper-V, VT-x/AMD-V, KVM, WSL2, Docker, container detection) |
@@ -193,6 +197,112 @@ fut = submit(download_file, url)
 # Bounded concurrency (sliding window)
 run_parallel(process, [(item,) for item in items], max_concurrent=8)
 ```
+
+### Work-Stealing Scheduler
+
+High-performance scheduler inspired by **Tokio** (Rust), **Go runtime** and **Java ForkJoinPool**.
+Each worker owns a local Chase-Lev deque — pops LIFO (cache-friendly), steals FIFO (fair). When idle, workers steal from random victims with exponential back-off parking.
+
+```python
+from pyaccelerate.work_stealing import WorkStealingScheduler, ws_submit, ws_map
+
+# Module-level convenience
+fut = ws_submit(my_func, arg1, arg2)
+results = ws_map(fn, [(a,), (b,), (c,)])
+
+# Full control
+with WorkStealingScheduler(num_workers=8, steal_batch_size=4) as sched:
+    futures = [sched.submit(process, item) for item in items]
+    results = [f.result() for f in futures]
+    print(sched.stats())  # completed, stolen, avg_latency_us
+```
+
+Or via the Engine:
+
+```python
+engine = Engine()
+fut = engine.ws_submit(my_func, arg1)
+results = engine.ws_map(fn, [(a,), (b,)])
+```
+
+### Lock-Free Task Queue
+
+The `lockfree_queue` module provides two data structures underlying the work-stealing scheduler:
+
+- **`WorkDeque`**: Per-worker Chase-Lev deque — owner push/pop lock-free (GIL + `collections.deque`), stealers use a lightweight spinlock.
+- **`MPMCQueue`**: Multi-Producer Multi-Consumer global injection queue with efficient `Event`-based parking.
+
+```python
+from pyaccelerate.lockfree_queue import WorkDeque, MPMCQueue
+
+# Per-worker deque
+d = WorkDeque()
+d.push(task)
+task = d.pop()        # LIFO (owner)
+task = d.steal()      # FIFO (other workers)
+batch = d.steal_batch(4)
+
+# Global queue
+q = MPMCQueue()
+q.put(task)
+q.put_batch([t1, t2, t3])
+task = q.get()
+q.wait(timeout=1.0)   # block until items arrive
+```
+
+### Adaptive Scheduler
+
+Wraps the work-stealing scheduler and **dynamically tunes** worker count based on real-time metrics:
+
+| Signal | Action |
+|---|---|
+| P95 latency > threshold + CPU < 70% | Scale **up** workers |
+| CPU utilisation > 90% | Scale **down** workers |
+| Memory pressure HIGH/CRITICAL | Shed workers immediately |
+| P95 latency very low (idle) | Scale **down** to save resources |
+| CPU load changes | Auto-tune steal batch size |
+
+```python
+from pyaccelerate.adaptive import AdaptiveScheduler, AdaptiveConfig
+
+cfg = AdaptiveConfig(
+    min_workers=2,
+    max_workers=16,
+    cooldown_seconds=2.0,
+)
+
+with AdaptiveScheduler(config=cfg) as sched:
+    results = sched.map(process, [(item,) for item in data])
+    print(sched.snapshot())  # workers, p95, cpu%, mem_pressure, adjustments
+```
+
+Or via the Engine:
+
+```python
+engine = Engine()
+with engine.adaptive_scheduler() as sched:
+    results = sched.map(heavy_fn, items)
+```
+
+### Native Accelerators (Optional)
+
+For maximum throughput, compile the hot-path data structures to native code:
+
+**Cython** (C extension):
+```bash
+pip install cython
+cd src/pyaccelerate/_native
+python setup_cython.py build_ext --inplace
+```
+
+**Rust** (PyO3 + crossbeam-deque — same algorithm as Tokio):
+```bash
+cd bindings/rust/pyaccelerate_native
+pip install maturin
+maturin develop --release
+```
+
+When a native extension is installed, it's used automatically — no code changes needed. The pure-Python fallback is always available.
 
 ### Multi-GPU Dispatch
 
@@ -416,10 +526,18 @@ pyaccelerate/
 ├── metrics.py      # Prometheus metrics exporter
 ├── server.py       # HTTP + gRPC multi-language API
 ├── k8s.py          # Kubernetes pod & GPU integration
-├── engine.py       # Unified orchestrator
-├── cli.py          # Command-line interface
+├── lockfree_queue.py # Lock-free MPMC & Chase-Lev deques
+├── work_stealing.py  # Work-stealing scheduler (Tokio/Go/FJP)
+├── adaptive.py       # Adaptive pressure-driven scheduler
+├── engine.py         # Unified orchestrator
+├── cli.py            # Command-line interface
+├── _native/          # Optional Cython accelerators
+│   ├── _fast_deque.pyx
+│   └── setup_cython.py
 └── bindings/
-    └── nodejs/     # npm client for Node.js / TypeScript
+    ├── nodejs/       # npm client for Node.js / TypeScript
+    └── rust/         # PyO3 Rust native extension
+        └── pyaccelerate_native/
 ```
 
 ## Examples
@@ -450,6 +568,10 @@ python example_priority.py
 - [x] gRPC server mode for multi-language integration
 - [x] Kubernetes operator for auto-scaling GPU workloads
 - [x] npm package (Node.js bindings via HTTP API)
+- [x] Work-stealing scheduler (Tokio / Go / ForkJoinPool style)
+- [x] Lock-free task queues (Chase-Lev deques, MPMC)
+- [x] Adaptive scheduler (latency, CPU & memory pressure)
+- [x] Optional native accelerators (Cython + Rust/PyO3)
 
 ## Origin
 

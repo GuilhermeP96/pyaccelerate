@@ -1,0 +1,13 @@
+[package]
+name = "pyaccelerate-native"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-accelerated work-stealing deque for PyAccelerate"
+
+[lib]
+name = "pyaccelerate_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+crossbeam-deque = "0.8"

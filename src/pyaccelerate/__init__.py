@@ -20,6 +20,10 @@ Modules
 - **server**     : JSON HTTP & gRPC server for multi-language integration
 - **k8s**        : Kubernetes integration, GPU auto-scaling, manifest generation
 - **engine**     : Unified orchestrator that auto-tunes all subsystems
+- **lockfree_queue** : Lock-free MPMC & Chase-Lev work-stealing deques
+- **work_stealing**  : Work-stealing scheduler (Tokio / Go / ForkJoinPool style)
+- **adaptive**       : Adaptive scheduler — latency, CPU & memory pressure driven
+- **_native**        : Optional Cython / Rust accelerators for hot-path data structures
 
 Quick start::
 
@@ -78,6 +82,14 @@ from pyaccelerate.priority import (  # noqa: E402, F401
 )
 from pyaccelerate.autotune import auto_tune, get_or_tune, apply_profile  # noqa: E402, F401
 from pyaccelerate.server import PyAccelerateServer  # noqa: E402, F401
+from pyaccelerate.work_stealing import (  # noqa: E402, F401
+    WorkStealingScheduler,
+    get_scheduler,
+    ws_submit,
+    ws_map,
+)
+from pyaccelerate.adaptive import AdaptiveScheduler, AdaptiveConfig  # noqa: E402, F401
+from pyaccelerate.lockfree_queue import WorkDeque, MPMCQueue  # noqa: E402, F401
 
 __all__ = [
     "__version__",
@@ -92,4 +104,12 @@ __all__ = [
     "get_or_tune",
     "apply_profile",
     "PyAccelerateServer",
+    "WorkStealingScheduler",
+    "get_scheduler",
+    "ws_submit",
+    "ws_map",
+    "AdaptiveScheduler",
+    "AdaptiveConfig",
+    "WorkDeque",
+    "MPMCQueue",
 ]

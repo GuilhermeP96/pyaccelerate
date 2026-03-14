@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
-keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization", "priority", "energy", "max-mode", "arm", "android", "termux", "aarch64", "snapdragon", "big-little", "iot", "sbc", "raspberry-pi", "jetson", "coral", "hailo", "embedded", "autotune", "prometheus", "metrics", "grpc", "kubernetes", "k8s", "server", "api"]
+keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization", "priority", "energy", "max-mode", "arm", "android", "termux", "aarch64", "snapdragon", "big-little", "iot", "sbc", "raspberry-pi", "jetson", "coral", "hailo", "embedded", "autotune", "prometheus", "metrics", "grpc", "kubernetes", "k8s", "server", "api", "work-stealing", "lock-free", "adaptive-scheduler", "tokio", "forkjoinpool"]
 dependencies = [
     "psutil>=5.9",
 ]
@@ -48,6 +48,7 @@ grpc = ["grpcio>=1.60"]
 k8s = ["kubernetes>=28.0"]
 prometheus = ["prometheus_client>=0.20"]
 numpy = ["numpy>=1.26"]
+native = ["cython>=3.0"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

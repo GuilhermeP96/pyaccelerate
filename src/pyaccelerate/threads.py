@@ -397,3 +397,23 @@ def _get_ram_gb() -> float:
         return psutil.virtual_memory().total / (1024 ** 3)
     except ImportError:
         return 8.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Work-stealing convenience bridge
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_work_stealing_pool(num_workers: int = 0) -> "WorkStealingScheduler":  # type: ignore[name-defined]
+    """Return the default work-stealing scheduler (lazily created).
+
+    This is a convenience bridge — for full control use
+    ``pyaccelerate.work_stealing.get_scheduler()`` directly.
+    """
+    from pyaccelerate.work_stealing import get_scheduler
+    return get_scheduler(num_workers)
+
+
+def ws_submit(fn: Callable[..., T], *args: Any, **kwargs: Any) -> Future[T]:
+    """Submit via the work-stealing scheduler (lower overhead than ThreadPoolExecutor)."""
+    from pyaccelerate.work_stealing import ws_submit as _ws_submit
+    return _ws_submit(fn, *args, **kwargs)

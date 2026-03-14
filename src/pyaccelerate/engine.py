@@ -268,8 +268,13 @@ class Engine:
     # ── Shutdown ───────────────────────────────────────────────────────
 
     def shutdown(self, wait_for: bool = True) -> None:
-        """Shut down all shared pools. Call during application exit."""
+        """Shut down all shared pools and schedulers. Call during application exit."""
         shutdown_pools(wait_for)
+        try:
+            from pyaccelerate.work_stealing import shutdown_scheduler
+            shutdown_scheduler(wait=wait_for)
+        except Exception:
+            pass
 
     # ── Info ────────────────────────────────────────────────────────────
 
@@ -548,3 +553,52 @@ class Engine:
         srv = PyAccelerateServer(http_port=http_port, grpc_port=grpc_port)
         srv.start(block=block)
         return srv
+
+    # ── Work-Stealing Scheduler ──────────────────────────────────────────
+
+    def get_work_stealing_scheduler(self) -> Any:
+        """Return a ``WorkStealingScheduler`` sized for this hardware.
+
+        The scheduler is lazily created and reused.
+        """
+        from pyaccelerate.work_stealing import get_scheduler
+        return get_scheduler(num_workers=self._cpu_workers)
+
+    def ws_submit(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> "Future[T]":
+        """Submit a task via the work-stealing scheduler (lower overhead)."""
+        sched = self.get_work_stealing_scheduler()
+        return sched.submit(fn, *args, **kwargs)
+
+    def ws_map(
+        self,
+        fn: Callable[..., T],
+        items: Sequence[tuple],
+        timeout: Optional[float] = None,
+    ) -> List[T]:
+        """Map ``fn`` over *items* using the work-stealing scheduler."""
+        sched = self.get_work_stealing_scheduler()
+        return sched.map(fn, items, timeout=timeout)
+
+    # ── Adaptive Scheduler ───────────────────────────────────────────────
+
+    def adaptive_scheduler(
+        self,
+        config: Optional[Any] = None,
+    ) -> Any:
+        """Return an :class:`AdaptiveScheduler` tuned for this hardware.
+
+        The adaptive scheduler monitors latency, CPU & memory pressure and
+        dynamically rescales workers.
+
+        Usage::
+
+            engine = Engine()
+            with engine.adaptive_scheduler() as sched:
+                results = sched.map(fn, items)
+        """
+        from pyaccelerate.adaptive import AdaptiveScheduler, AdaptiveConfig
+        cfg = config or AdaptiveConfig(
+            min_workers=max(2, self._cpu_workers // 2),
+            max_workers=self._cpu_workers * 2,
+        )
+        return AdaptiveScheduler(config=cfg, num_workers=self._cpu_workers)
