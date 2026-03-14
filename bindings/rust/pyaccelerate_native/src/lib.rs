@@ -91,3 +91,4 @@ fn pyaccelerate_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FastDeque>()?;
     Ok(())
 }
+
