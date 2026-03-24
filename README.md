@@ -5,6 +5,9 @@
 [![CI](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/ci.yml/badge.svg)](https://github.com/GuilhermeP96/pyaccelerate/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/pyaccelerate.svg)](https://pypi.org/project/pyaccelerate/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/pyaccelerate.svg?label=PyPI%20downloads)](https://pypi.org/project/pyaccelerate/)
+[![PyPI Stats](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/pypi-stats.yml/badge.svg)](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/pypi-stats.yml)
 
 ---
 
@@ -642,3 +645,22 @@ Evolved from the acceleration & virtual-thread systems built for:
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- PYPI-STATS-START -->
+## 📊 PyPI Download Statistics
+
+> Last updated: — (refreshed every Monday via GitHub Actions — [run manually](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/pypi-stats.yml))
+
+| Period      | Downloads |
+|-------------|-----------|
+| Last day    | — |
+| Last week   | — |
+| Last month  | — |
+| **Total**   | **—** |
+
+### By Python version (top 5)
+
+| Version | Downloads |
+|---------|-----------|
+| —       | —         |
+<!-- PYPI-STATS-END -->

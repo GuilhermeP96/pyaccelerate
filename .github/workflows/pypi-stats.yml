@@ -1,0 +1,131 @@
+name: PyPI Stats
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Every Monday at 06:00 UTC
+  workflow_dispatch:        # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  update-stats:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pypistats
+        run: pip install pypistats
+
+      - name: Fetch PyPI download stats and update README
+        run: |
+          python - <<'EOF'
+          import subprocess, json, datetime, re, sys, textwrap
+
+          pkg = "pyaccelerate"
+
+          def run(args):
+              result = subprocess.run(args, capture_output=True, text=True)
+              if result.returncode != 0:
+                  print(f"Error running {args}: {result.stderr}", file=sys.stderr)
+                  sys.exit(1)
+              return json.loads(result.stdout)
+
+          overall  = run(["pypistats", "overall",      pkg, "--json"])
+          python_v = run(["pypistats", "python_major", pkg, "--json"])
+          recent   = run(["pypistats", "recent",       pkg, "--json"])
+
+          # ── overall: data is a list [{category, downloads}, ...]
+          #    with_mirrors is the broadest total; fall back to summing all rows.
+          overall_data = overall.get("data", [])
+          if isinstance(overall_data, list):
+              with_mirrors = next(
+                  (r["downloads"] for r in overall_data if r.get("category") == "with_mirrors"),
+                  None,
+              )
+              total_downloads = with_mirrors if with_mirrors is not None else sum(
+                  r.get("downloads", 0) for r in overall_data
+              )
+          else:
+              total_downloads = 0
+
+          # ── recent: data is a dict {last_day, last_week, last_month}
+          recent_data = recent.get("data", {})
+          if isinstance(recent_data, dict):
+              last_day   = recent_data.get("last_day",   0)
+              last_week  = recent_data.get("last_week",  0)
+              last_month = recent_data.get("last_month", 0)
+          else:
+              last_day = last_week = last_month = 0
+
+          # ── Python version breakdown ─────────────────────────────────────
+          python_data = python_v.get("data", [])
+          py_rows = sorted(
+              [r for r in (python_data if isinstance(python_data, list) else [])
+               if r.get("category") not in ("null", None)],
+              key=lambda r: r.get("downloads", 0),
+              reverse=True,
+          )[:5]
+
+          py_table_rows = "\n".join(
+              f"| Python {r['category']} | {r['downloads']:,} |"
+              for r in py_rows
+          ) or "| —       | —         |"
+
+          # ── Build the stats section ───────────────────────────────────────
+          updated = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+          section = textwrap.dedent(f"""\
+          <!-- PYPI-STATS-START -->
+          ## 📊 PyPI Download Statistics
+
+          > Last updated: {updated} (refreshed every Monday via GitHub Actions — [run manually](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/pypi-stats.yml))
+
+          | Period      | Downloads |
+          |-------------|-----------|
+          | Last day    | {last_day:,} |
+          | Last week   | {last_week:,} |
+          | Last month  | {last_month:,} |
+          | **Total**   | **{total_downloads:,}** |
+
+          ### By Python version (top 5)
+
+          | Version | Downloads |
+          |---------|-----------|
+          {py_table_rows}
+          <!-- PYPI-STATS-END -->""")
+
+          readme_path = "README.md"
+          with open(readme_path, "r", encoding="utf-8") as fh:
+              content = fh.read()
+
+          pattern = r"<!-- PYPI-STATS-START -->.*?<!-- PYPI-STATS-END -->"
+          if re.search(pattern, content, re.DOTALL):
+              new_content = re.sub(pattern, section, content, flags=re.DOTALL)
+          else:
+              new_content = content.rstrip("\n") + "\n\n" + section + "\n"
+
+          with open(readme_path, "w", encoding="utf-8") as fh:
+              fh.write(new_content)
+
+          print("README.md updated successfully.")
+          EOF
+
+      - name: Commit updated README
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update PyPI download statistics [skip ci]"
+            git push
+          fi
