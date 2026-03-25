@@ -21,17 +21,17 @@
 | **`lockfree_queue`** | Lock-free MPMC queue & per-worker Chase-Lev deques for minimal contention |
 | **`adaptive`** | Adaptive scheduler — auto-scales workers based on latency, CPU pressure & memory pressure |
 | **`_native`** | Optional Cython / Rust (PyO3) accelerators for hot-path data structures |
-| **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI, ARM Adreno/Mali/Immortalis), ranking, multi-GPU dispatch, **shared VRAM detection, Vulkan version probing** |
+| **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI, ARM Adreno/Mali/Immortalis), **architecture classification** (Kepler→Blackwell, GCN→RDNA4/CDNA3), **CUDA/Tensor/RT core counts**, NVENC/NVDEC & VCN encode/decode, clocks, memory type & bandwidth, PCIe info, driver version, shared VRAM for all vendors, Vulkan probing, ranking, multi-GPU dispatch |
 | **`npu`** | NPU detection & inference (OpenVINO, ONNX Runtime, DirectML, CoreML, ARM Hexagon/Samsung NPU/Tensor TPU/MediaTek APU) |
 | **`virt`** | Virtualization detection (Hyper-V, VT-x/AMD-V, KVM, WSL2, Docker, container detection) |
-| **`memory`** | Memory pressure monitoring, automatic worker clamping, reusable buffer pool, **GPU memory stats (dedicated + shared VRAM)** |
+| **`memory`** | Memory pressure monitoring, automatic worker clamping, reusable buffer pool, **GPU memory stats (dedicated + shared VRAM, CUDA/Tensor/RT cores, bandwidth, features)** |
 | **`profiler`** | `@timed`, `@profile_memory` decorators, `Timer` context manager, `Tracker` statistics |
 | **`benchmark`** | Built-in micro-benchmarks (CPU, threads, memory bandwidth, GPU compute) |
 | **`priority`** | OS-level task priority (IDLE → REALTIME) & energy profiles (POWER_SAVER → ULTRA_PERFORMANCE) |
 | **`max_mode`** | Maximum optimization mode — activates ALL resources simultaneously with OS tuning |
 | **`android`** | Android/Termux platform detection, ARM SoC database (25+ chipsets), big.LITTLE, thermal & battery |
 | **`iot`** | IoT / SBC detection (Raspberry Pi, Jetson, BeagleBone, Coral, Hailo, 30+ SoCs) |
-| **`autotune`** | Auto-tuning feedback loop — benchmark → config → re-tune, persistent profiles, **hardware-safe limits & config clamping** |
+| **`autotune`** | Auto-tuning feedback loop — benchmark → config → re-tune, persistent profiles, **hardware-safe limits & config clamping**, GPU architecture/features/driver profiling |
 | **`metrics`** | Prometheus metrics exporter (`/metrics` HTTP endpoint, all subsystems) |
 | **`server`** | JSON HTTP & gRPC server for multi-language integration (Node.js, Go, Java, etc.) |
 | **`k8s`** | Kubernetes operator — pod info, GPU node capacity, auto-scaling, manifest generation |
@@ -175,7 +175,7 @@ set_energy_profile(EnergyProfile.PERFORMANCE)
 ```bash
 pyaccelerate info          # Full hardware report
 pyaccelerate benchmark     # Run micro-benchmarks
-pyaccelerate gpu           # GPU details (VRAM, shared VRAM, Vulkan version)
+pyaccelerate gpu           # GPU details (architecture, cores, VRAM, clocks, features, driver, PCIe)
 pyaccelerate cpu           # CPU details
 pyaccelerate npu           # NPU details
 pyaccelerate android       # ARM/Android device details (SoC, clusters, thermal)
@@ -431,30 +431,85 @@ safe = clamp_config(user_config)
 
 ### GPU Memory Stats
 
-Query dedicated + shared VRAM for the best GPU:
+Query dedicated + shared VRAM and hardware details for the best GPU:
 
 ```python
 from pyaccelerate.memory import get_gpu_memory_stats
 
 stats = get_gpu_memory_stats()
-# {"gpu_available": 1.0, "gpu_dedicated_gb": 1.0,
-#  "gpu_shared_gb": 7.9, "gpu_total_gb": 8.9,
-#  "gpu_is_discrete": 0.0, "gpu_vulkan": 1.0}
+# {"gpu_available": 1.0, "gpu_dedicated_gb": 6.0,
+#  "gpu_shared_gb": 28.0, "gpu_total_gb": 34.0,
+#  "gpu_is_discrete": 1.0, "gpu_vulkan": 1.0,
+#  "gpu_cuda_cores": 1408, "gpu_tensor_cores": 0,
+#  "gpu_has_hw_encode": 1.0, "gpu_has_hw_decode": 1.0,
+#  "gpu_memory_bandwidth_gbps": 336.0, "gpu_boost_clock_mhz": 2130}
 ```
 
 ### GPU Shared VRAM & Vulkan Detection
 
-The `GPUDevice` dataclass now exposes shared system memory and Vulkan version:
+The `GPUDevice` dataclass exposes comprehensive GPU hardware details — architecture, cores, features, clocks, memory type, driver, PCIe, and shared VRAM:
 
 ```python
 from pyaccelerate.gpu import detect_all
 
 for g in detect_all():
     print(f"{g.name}: {g.memory_gb:.1f} GB dedicated")
-    print(f"  Shared VRAM: {g.shared_memory_gb:.1f} GB")
-    print(f"  Total:       {g.total_memory_gb:.1f} GB")
-    print(f"  Vulkan:      {g.vulkan_version or 'not detected'}")
+    print(f"  Architecture:    {g.architecture} | CC {g.cuda_capability}")
+    print(f"  Cores:           CUDA={g.cuda_cores} Tensor={g.tensor_cores} RT={g.rt_cores}")
+    print(f"  Shared VRAM:     {g.shared_memory_gb:.1f} GB")
+    print(f"  Total:           {g.total_memory_gb:.1f} GB")
+    print(f"  Memory:          {g.memory_type} | {g.memory_bus_width}-bit | {g.memory_bandwidth_gbps:.0f} GB/s")
+    print(f"  Clock:           {g.boost_clock_mhz} MHz boost")
+    print(f"  Features:        {', '.join(g.features)}")
+    print(f"  HW Encode/Dec:   NVENC={g.has_nvenc} NVDEC={g.has_nvdec}")
+    print(f"  PCIe:            Gen{g.pcie_gen} x{g.pcie_width}")
+    print(f"  Driver:          {g.driver_version} | CUDA: {g.cuda_driver_version}")
+    print(f"  Vulkan:          {g.vulkan_version or 'not detected'}")
 ```
+
+#### Supported GPU Attributes
+
+| Field | Type | Description |
+|---|---|---|
+| `architecture` | `str` | GPU architecture (Turing, Ampere, Ada Lovelace, RDNA 3, etc.) |
+| `cuda_capability` | `str` | NVIDIA Compute Capability (e.g. "7.5") |
+| `cuda_cores` | `int` | Total CUDA cores (NVIDIA) or Stream Processors (AMD) |
+| `tensor_cores` | `int` | Tensor core count (RTX / data-center only) |
+| `rt_cores` | `int` | RT core count (RTX only) |
+| `has_tensor` | `bool` | Tensor / mixed-precision acceleration available |
+| `has_raytracing` | `bool` | Hardware ray tracing available |
+| `has_nvenc` | `bool` | Hardware video encoder (NVENC / VCN) |
+| `has_nvdec` | `bool` | Hardware video decoder (NVDEC / VCN) |
+| `clock_mhz` | `int` | Base clock (MHz) |
+| `boost_clock_mhz` | `int` | Boost clock (MHz) |
+| `memory_clock_mhz` | `int` | Memory clock (MHz) |
+| `memory_type` | `str` | Memory type (GDDR5, GDDR6, GDDR6X, HBM2e, HBM3) |
+| `memory_bus_width` | `int` | Memory bus width (bits) |
+| `memory_bandwidth_gbps` | `float` | Effective memory bandwidth (GB/s) |
+| `pcie_gen` | `int` | PCIe generation (3, 4, 5) |
+| `pcie_width` | `int` | PCIe link width (16, 8, etc.) |
+| `driver_version` | `str` | GPU driver version |
+| `cuda_driver_version` | `str` | CUDA runtime version |
+| `power_limit_w` | `int` | TDP / power limit (watts) |
+| `copy_engines` | `int` | Async DMA copy engines |
+| `features` | `list[str]` | Capability flags (compute, tensor, hw_encode, cuda_7.5, turing, etc.) |
+| `shared_memory_bytes` | `int` | Shared system memory (all vendors on Windows) |
+| `vulkan_version` | `str` | Vulkan API version |
+
+#### NVIDIA Architecture Coverage
+
+Kepler (3.0) → Maxwell (5.x) → Pascal (6.x) → Volta (7.0) → Turing (7.5) → Ampere (8.x) → Ada Lovelace (8.9) → Hopper (9.0) → Blackwell (10.x)
+
+- **GTX 16xx** (Turing): CUDA cores + NVENC/NVDEC, no Tensor/RT cores
+- **RTX 20xx** (Turing): Full Tensor + RT cores
+- **RTX 30xx** (Ampere): Enhanced Tensor + RT cores, 2nd gen
+- **RTX 40xx** (Ada Lovelace): 4th gen Tensor, 3rd gen RT, DLSS 3
+- **RTX 50xx** (Blackwell): 5th gen Tensor, 4th gen RT
+- **Data center** (A100/H100/B100): Tensor cores, no RT cores
+
+#### AMD Architecture Coverage
+
+GCN 4 (RX 400/500) → GCN 5 (Vega) → RDNA (RX 5000) → RDNA 2 (RX 6000) → RDNA 3 (RX 7000) → RDNA 4 (RX 9000) → CDNA/CDNA 2/CDNA 3 (Instinct MI series)
 
 ### Prometheus Metrics
 

@@ -36,12 +36,36 @@ class GPUDevice:
     backend: str = ""          # "cuda", "opencl", "intel", "vulkan", "none"
     vendor: str = ""           # "NVIDIA", "Intel", "AMD", "unknown"
     memory_bytes: int = 0      # VRAM (dedicated/global memory) in bytes
-    shared_memory_bytes: int = 0  # Shared VRAM (iGPU using system RAM) in bytes
+    shared_memory_bytes: int = 0  # Shared VRAM (system RAM mapped for GPU) in bytes
     compute_units: int = 0     # SMs / CUs / EUs
     is_discrete: bool = False  # discrete vs integrated
     vulkan_version: str = ""   # e.g. "1.2.154" if Vulkan-capable
     _module: Any = None        # runtime handle (cupy, pyopencl ctx, dpctl device)
     _index: int = 0            # device ordinal in its backend
+
+    # ── Extended attributes (v0.9) ──────────────────────────────────────
+    architecture: str = ""         # "Turing", "Ampere", "Ada Lovelace", "RDNA 3" …
+    cuda_capability: str = ""      # "7.5", "8.6" (NVIDIA CUDA compute capability)
+    cuda_cores: int = 0            # Total CUDA cores (NVIDIA) or Stream Processors (AMD)
+    tensor_cores: int = 0          # Total Tensor cores (RTX / Volta / data-center)
+    rt_cores: int = 0              # Total RT cores (hardware ray-tracing units)
+    has_tensor: bool = False       # Tensor / matrix acceleration present
+    has_raytracing: bool = False   # Hardware ray-tracing present
+    has_nvenc: bool = False        # Hardware video encoder (NVIDIA NVENC / AMD VCN)
+    has_nvdec: bool = False        # Hardware video decoder (NVIDIA NVDEC / AMD VCN)
+    clock_mhz: int = 0            # Base / current clock (MHz)
+    boost_clock_mhz: int = 0      # Boost clock (MHz)
+    memory_clock_mhz: int = 0     # Memory clock (MHz)
+    memory_type: str = ""          # "GDDR6", "GDDR6X", "HBM2e", "HBM3" …
+    memory_bus_width: int = 0      # Memory bus width (bits)
+    memory_bandwidth_gbps: float = 0.0  # Effective memory bandwidth (GB/s)
+    pcie_gen: int = 0              # PCIe generation (3, 4, 5)
+    pcie_width: int = 0            # PCIe link width (16, 8 …)
+    driver_version: str = ""       # GPU driver version string
+    cuda_driver_version: str = ""  # CUDA toolkit / driver API version
+    power_limit_w: int = 0         # TDP / power limit (watts)
+    l2_cache_bytes: int = 0        # L2 cache size (bytes)
+    copy_engines: int = 0          # Async DMA copy engines
 
     @property
     def memory_gb(self) -> float:
@@ -53,7 +77,7 @@ class GPUDevice:
 
     @property
     def total_memory_bytes(self) -> int:
-        """Total addressable memory: dedicated + shared (for iGPUs)."""
+        """Total addressable memory: dedicated + shared."""
         return self.memory_bytes + self.shared_memory_bytes
 
     @property
@@ -67,6 +91,7 @@ class GPUDevice:
         Discrete GPUs get a large bonus.  Integrated GPUs with shared VRAM
         get a smaller bonus proportional to usable shared memory (capped at
         half the weight of dedicated VRAM to avoid over-ranking iGPUs).
+        Modern features (tensor, RT) add moderate bonuses.
         """
         s = self.memory_bytes // (1024 * 1024)  # MB of dedicated VRAM
         # Shared VRAM counts at half weight (system RAM is slower than GDDR)
@@ -75,6 +100,10 @@ class GPUDevice:
         s += self.compute_units * 50
         if self.is_discrete:
             s += 100_000
+        if self.has_tensor:
+            s += 50_000
+        if self.has_raytracing:
+            s += 10_000
         return s
 
     @property
@@ -82,16 +111,39 @@ class GPUDevice:
         """True if a compute backend is available (not just OS-level name)."""
         return self.backend != "none"
 
+    @property
+    def features(self) -> List[str]:
+        """List of hardware capability flags for this GPU."""
+        f: List[str] = []
+        if self.usable:
+            f.append("compute")
+        if self.has_tensor:
+            f.append("tensor")
+        if self.has_raytracing:
+            f.append("raytracing")
+        if self.has_nvenc:
+            f.append("hw_encode")
+        if self.has_nvdec:
+            f.append("hw_decode")
+        if self.cuda_capability:
+            f.append(f"cuda_{self.cuda_capability}")
+        if self.architecture:
+            f.append(self.architecture.lower().replace(" ", "_"))
+        if self.copy_engines:
+            f.append(f"copy_engines×{self.copy_engines}")
+        return f
+
     def short_label(self) -> str:
         mem = f"{self.memory_gb:.1f} GB" if self.memory_bytes else "?"
         extra = ""
-        if self.shared_memory_bytes and not self.is_discrete:
+        if self.shared_memory_bytes:
             extra = f" +{self.shared_memory_gb:.1f} GB shared"
+        arch = f" {self.architecture}" if self.architecture else ""
         vk = " Vulkan" if self.vulkan_version else ""
-        return f"{self.name} ({self.backend.upper()}, {mem}{extra}{vk})"
+        return f"{self.name} ({self.backend.upper()}, {mem}{extra}{arch}{vk})"
 
     def as_dict(self) -> Dict[str, str]:
-        d = {
+        d: Dict[str, str] = {
             "name": self.name,
             "backend": self.backend,
             "vendor": self.vendor,
@@ -106,6 +158,43 @@ class GPUDevice:
             d["total_memory"] = f"{self.total_memory_gb:.1f} GB"
         if self.vulkan_version:
             d["vulkan_version"] = self.vulkan_version
+        if self.architecture:
+            d["architecture"] = self.architecture
+        if self.cuda_capability:
+            d["cuda_capability"] = self.cuda_capability
+        if self.cuda_cores:
+            d["cuda_cores"] = str(self.cuda_cores)
+        if self.tensor_cores:
+            d["tensor_cores"] = str(self.tensor_cores)
+        if self.rt_cores:
+            d["rt_cores"] = str(self.rt_cores)
+        if self.has_tensor:
+            d["has_tensor"] = "True"
+        if self.has_raytracing:
+            d["has_raytracing"] = "True"
+        if self.has_nvenc:
+            d["has_hw_encode"] = "True"
+        if self.has_nvdec:
+            d["has_hw_decode"] = "True"
+        if self.clock_mhz:
+            d["clock_mhz"] = str(self.clock_mhz)
+        if self.boost_clock_mhz:
+            d["boost_clock_mhz"] = str(self.boost_clock_mhz)
+        if self.memory_type:
+            d["memory_type"] = self.memory_type
+        if self.memory_bus_width:
+            d["memory_bus_width"] = f"{self.memory_bus_width}-bit"
+        if self.memory_bandwidth_gbps:
+            d["memory_bandwidth"] = f"{self.memory_bandwidth_gbps:.0f} GB/s"
+        if self.pcie_gen:
+            d["pcie"] = f"Gen{self.pcie_gen} x{self.pcie_width}" if self.pcie_width else f"Gen{self.pcie_gen}"
+        if self.driver_version:
+            d["driver_version"] = self.driver_version
+        if self.power_limit_w:
+            d["power_limit"] = f"{self.power_limit_w} W"
+        if self.copy_engines:
+            d["copy_engines"] = str(self.copy_engines)
+        d["features"] = ", ".join(self.features) if self.features else "none"
         return d
 
 
@@ -166,6 +255,193 @@ def _vendor_from_name(name: str) -> Tuple[str, bool]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Architecture databases — NVIDIA & AMD
+# ═══════════════════════════════════════════════════════════════════════════
+
+# (major, minor) → (arch_name, cuda_cores_per_sm, tensor_per_sm, rt_per_sm)
+# tensor_per_sm / rt_per_sm = 0 means the *arch* doesn't have them at all.
+# Non-zero means the arch supports them but the specific SKU may not (e.g. GTX 16xx).
+_NVIDIA_ARCH: Dict[Tuple[int, int], Tuple[str, int, int, int]] = {
+    (3, 0): ("Kepler",        192, 0, 0),
+    (3, 2): ("Kepler",        192, 0, 0),
+    (3, 5): ("Kepler",        192, 0, 0),
+    (3, 7): ("Kepler",        192, 0, 0),
+    (5, 0): ("Maxwell",       128, 0, 0),
+    (5, 2): ("Maxwell",       128, 0, 0),
+    (5, 3): ("Maxwell",       128, 0, 0),
+    (6, 0): ("Pascal",         64, 0, 0),
+    (6, 1): ("Pascal",        128, 0, 0),
+    (6, 2): ("Pascal",        128, 0, 0),
+    (7, 0): ("Volta",          64, 8, 0),   # V100: always has tensor
+    (7, 2): ("Volta",          64, 8, 0),   # Jetson Xavier
+    (7, 5): ("Turing",         64, 8, 1),   # RTX 20xx: tensor+RT; GTX 16xx: neither
+    (8, 0): ("Ampere",         64, 4, 0),   # A100 (data-center, no RT)
+    (8, 6): ("Ampere",        128, 4, 1),   # RTX 30xx
+    (8, 7): ("Ampere",        128, 4, 1),   # Jetson Orin
+    (8, 9): ("Ada Lovelace",  128, 4, 1),   # RTX 40xx
+    (9, 0): ("Hopper",        128, 4, 0),   # H100 (data-center, no RT)
+    (10, 0): ("Blackwell",    128, 4, 1),   # RTX 50xx / B100
+    (10, 2): ("Blackwell",    128, 4, 1),   # B200
+}
+
+# AMD GPU name patterns → (architecture, has_ray_accel, has_vcn_encode)
+_AMD_ARCH_PATTERNS: List[Tuple[str, str, bool, bool]] = [
+    ("rx 9",       "RDNA 4",  True,  True),
+    ("rx 79",      "RDNA 3",  True,  True),
+    ("rx 78",      "RDNA 3",  True,  True),
+    ("rx 76",      "RDNA 3",  True,  True),
+    ("rx 75",      "RDNA 3",  True,  True),
+    ("rx 69",      "RDNA 2",  True,  True),
+    ("rx 68",      "RDNA 2",  True,  True),
+    ("rx 67",      "RDNA 2",  True,  True),
+    ("rx 66",      "RDNA 2",  True,  True),
+    ("rx 65",      "RDNA 2",  True,  True),
+    ("rx 64",      "RDNA 2",  True,  True),
+    ("rx 57",      "RDNA",    False, True),
+    ("rx 56",      "RDNA",    False, True),
+    ("rx 55",      "RDNA",    False, True),
+    ("rx 54",      "RDNA",    False, True),
+    ("radeon vii", "GCN 5",   False, True),
+    ("vega",       "GCN 5",   False, True),
+    ("rx 590",     "GCN 4",   False, True),
+    ("rx 580",     "GCN 4",   False, True),
+    ("rx 570",     "GCN 4",   False, True),
+    ("rx 560",     "GCN 4",   False, True),
+    ("rx 550",     "GCN 4",   False, True),
+    ("rx 480",     "GCN 4",   False, True),
+    ("rx 470",     "GCN 4",   False, True),
+    ("rx 460",     "GCN 4",   False, True),
+    ("instinct mi3", "CDNA 3", False, True),
+    ("instinct mi2", "CDNA 2", False, True),
+    ("instinct mi1", "CDNA",   False, True),
+    ("radeon pro w7", "RDNA 3", True, True),
+    ("radeon pro w6", "RDNA 2", True, True),
+    ("radeon pro",    "GCN",   False, True),
+]
+
+# Memory type heuristics by architecture + bus width
+_MEMORY_TYPE_HINTS: Dict[str, str] = {
+    "Kepler":       "GDDR5",
+    "Maxwell":      "GDDR5",
+    "Pascal":       "GDDR5X",     # GP102/104 use GDDR5X; GP106/107 use GDDR5
+    "Volta":        "HBM2",
+    "Turing":       "GDDR6",
+    "Ampere":       "GDDR6X",     # RTX 30xx; A100 uses HBM2e
+    "Ada Lovelace": "GDDR6X",     # RTX 40xx
+    "Hopper":       "HBM3",
+    "Blackwell":    "GDDR7",      # RTX 50xx consumer; B100/B200 use HBM3e
+    "GCN 4":        "GDDR5",
+    "GCN 5":        "HBM2",       # Vega; RX 580 etc are GCN 4
+    "RDNA":         "GDDR6",
+    "RDNA 2":       "GDDR6",
+    "RDNA 3":       "GDDR6",
+    "RDNA 4":       "GDDR6",
+    "CDNA":         "HBM2",
+    "CDNA 2":       "HBM2e",
+    "CDNA 3":       "HBM3",
+}
+
+
+def _classify_nvidia(name: str, major: int, minor: int, sms: int) -> Dict[str, Any]:
+    """Derive NVIDIA architecture, core counts, and feature flags.
+
+    Combines CUDA compute capability with device name to distinguish
+    e.g. GTX 16xx (no tensor/RT) from RTX 20xx (tensor+RT) on same CC 7.5.
+    """
+    nl = name.lower()
+    is_rtx = "rtx" in nl
+    is_datacenter = any(k in nl for k in ("a100", "a800", "h100", "h200",
+                                           "b100", "b200", "v100", "l40", "l4 "))
+    arch = _NVIDIA_ARCH.get((major, minor))
+    if arch is None:
+        # Fallback: pick closest known arch (round down)
+        for (maj, mi), info in sorted(_NVIDIA_ARCH.items(), reverse=True):
+            if (maj, mi) <= (major, minor):
+                arch = info
+                break
+    if arch is None:
+        arch = ("Unknown", 64, 0, 0)
+
+    arch_name, cores_per_sm, tensor_per_sm, rt_per_sm = arch
+    cuda_cores = sms * cores_per_sm
+
+    # ── Tensor cores ──
+    has_tensor = False
+    tensor_cores = 0
+    if tensor_per_sm > 0:
+        if is_rtx or is_datacenter or major >= 8:
+            has_tensor = True
+            tensor_cores = sms * tensor_per_sm
+        elif major == 7 and minor == 0:
+            # Volta (V100): always has tensor
+            has_tensor = True
+            tensor_cores = sms * tensor_per_sm
+
+    # ── RT cores ──
+    has_rt = False
+    rt_cores = 0
+    if rt_per_sm > 0:
+        if is_rtx or (major >= 8 and minor >= 6):
+            has_rt = True
+            rt_cores = sms * rt_per_sm
+        # Data-center chips (A100, H100): no RT cores
+        if is_datacenter and major in (8, 9) and minor in (0,):
+            has_rt = False
+            rt_cores = 0
+
+    # ── NVENC / NVDEC: Maxwell (sm5.0) and newer ──
+    has_nvenc = major >= 5
+    has_nvdec = major >= 3  # NVDEC since Kepler (VP5)
+
+    # ── Memory type override for specific SKUs ──
+    mem_type = _MEMORY_TYPE_HINTS.get(arch_name, "")
+    if "a100" in nl:
+        mem_type = "HBM2e"
+    elif "h200" in nl:
+        mem_type = "HBM3e"
+    elif arch_name == "Pascal":
+        # GP106/107 (GTX 1060/1050) use GDDR5, GP102/104 use GDDR5X
+        if any(k in nl for k in ("1050", "1060", "1030")):
+            mem_type = "GDDR5"
+    elif arch_name == "Ampere" and not is_rtx:
+        if is_datacenter:
+            mem_type = "HBM2e"
+    elif arch_name == "Ada Lovelace":
+        if any(k in nl for k in ("4060", "4070")):
+            mem_type = "GDDR6"  # lower-tier Ada uses GDDR6
+    elif arch_name == "Blackwell" and is_datacenter:
+        mem_type = "HBM3e"
+
+    return {
+        "architecture": arch_name,
+        "cuda_capability": f"{major}.{minor}",
+        "cuda_cores": cuda_cores,
+        "tensor_cores": tensor_cores,
+        "rt_cores": rt_cores,
+        "has_tensor": has_tensor,
+        "has_raytracing": has_rt,
+        "has_nvenc": has_nvenc,
+        "has_nvdec": has_nvdec,
+        "memory_type": mem_type,
+    }
+
+
+def _classify_amd(name: str) -> Dict[str, Any]:
+    """Derive AMD architecture and feature flags from device name."""
+    nl = name.lower()
+    for pattern, arch, has_ray, has_vcn in _AMD_ARCH_PATTERNS:
+        if pattern in nl:
+            return {
+                "architecture": arch,
+                "has_raytracing": has_ray,
+                "has_nvenc": has_vcn,   # VCN encode mapped to has_nvenc flag
+                "has_nvdec": has_vcn,   # VCN decode mapped to has_nvdec flag
+                "memory_type": _MEMORY_TYPE_HINTS.get(arch, ""),
+            }
+    return {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Detection — enumerate all backends
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -205,6 +481,12 @@ def detect_all() -> List[GPUDevice]:
         # ── Enrich existing GPUs with shared VRAM & Vulkan info ──
         _enrich_shared_vram(gpus)
 
+        # ── Enrich NVIDIA GPUs with nvidia-smi data (driver, power, PCIe) ──
+        _enrich_nvidia_smi(gpus)
+
+        # ── Enrich AMD GPUs with rocm-smi / architecture data ──
+        _enrich_amd(gpus)
+
         # ── OS-level fallback ──
         if not gpus:
             for hw_name in _detect_os_gpu_names():
@@ -236,7 +518,7 @@ def detect_all() -> List[GPUDevice]:
 # ── Backend probes ──────────────────────────────────────────────────────
 
 def _probe_cuda(seen: set[str]) -> List[GPUDevice]:
-    """Probe CUDA devices via CuPy."""
+    """Probe CUDA devices via CuPy — extracts full hardware profile."""
     gpus: List[GPUDevice] = []
     try:
         import cupy as cp  # type: ignore[import-untyped]
@@ -249,12 +531,50 @@ def _probe_cuda(seen: set[str]) -> List[GPUDevice]:
                     dev_name = dev_name.decode()
                 mem = props.get("totalGlobalMem", 0)
                 sms = props.get("multiProcessorCount", 0)
+                major = props.get("major", 0)
+                minor = props.get("minor", 0)
                 vendor, discrete = _vendor_from_name(dev_name)
-                gpus.append(GPUDevice(
+
+                # Clock / memory bus / cache / copy engines
+                clock_khz = props.get("clockRate", 0)           # kHz
+                mem_clock_khz = props.get("memoryClockRate", 0)  # kHz
+                bus_width = props.get("memoryBusWidth", 0)       # bits
+                l2_cache = props.get("l2CacheSize", 0)           # bytes
+                async_engines = props.get("asyncEngineCount", 0)
+
+                clock_mhz = clock_khz // 1000 if clock_khz else 0
+                mem_clock_mhz = mem_clock_khz // 1000 if mem_clock_khz else 0
+                # Effective bandwidth = 2 × mem_clock (DDR) × bus_width / 8
+                bw_gbps = 0.0
+                if mem_clock_mhz and bus_width:
+                    bw_gbps = round(2 * mem_clock_mhz * bus_width / 8 / 1000, 1)
+
+                # NVIDIA feature classification
+                nv = _classify_nvidia(dev_name, major, minor, sms)
+
+                gpu = GPUDevice(
                     name=dev_name, backend="cuda", vendor=vendor,
                     memory_bytes=mem, compute_units=sms,
                     is_discrete=discrete, _module=cp, _index=i,
-                ))
+                    architecture=nv.get("architecture", ""),
+                    cuda_capability=nv.get("cuda_capability", ""),
+                    cuda_cores=nv.get("cuda_cores", 0),
+                    tensor_cores=nv.get("tensor_cores", 0),
+                    rt_cores=nv.get("rt_cores", 0),
+                    has_tensor=nv.get("has_tensor", False),
+                    has_raytracing=nv.get("has_raytracing", False),
+                    has_nvenc=nv.get("has_nvenc", False),
+                    has_nvdec=nv.get("has_nvdec", False),
+                    clock_mhz=clock_mhz,
+                    boost_clock_mhz=clock_mhz,  # CUDA reports boost as clockRate
+                    memory_clock_mhz=mem_clock_mhz,
+                    memory_type=nv.get("memory_type", ""),
+                    memory_bus_width=bus_width,
+                    memory_bandwidth_gbps=bw_gbps,
+                    l2_cache_bytes=l2_cache,
+                    copy_engines=async_engines,
+                )
+                gpus.append(gpu)
                 seen.add(dev_name.lower().strip())
             except Exception:
                 pass
@@ -264,7 +584,7 @@ def _probe_cuda(seen: set[str]) -> List[GPUDevice]:
 
 
 def _probe_opencl(seen: set[str]) -> List[GPUDevice]:
-    """Probe GPU devices via PyOpenCL."""
+    """Probe GPU devices via PyOpenCL — enriches AMD devices with arch info."""
     gpus: List[GPUDevice] = []
     try:
         import pyopencl as cl  # type: ignore[import-untyped]
@@ -280,11 +600,24 @@ def _probe_opencl(seen: set[str]) -> List[GPUDevice]:
                         cus = dev.max_compute_units
                     except Exception:
                         cus = 0
+
+                    extra: Dict[str, Any] = {}
+                    if vendor == "AMD":
+                        extra = _classify_amd(dev_name)
+                    elif vendor == "NVIDIA":
+                        # CuPy should have caught this; but fill arch if not
+                        extra = {"has_nvenc": True, "has_nvdec": True}
+
                     gpus.append(GPUDevice(
                         name=dev_name, backend="opencl", vendor=vendor,
                         memory_bytes=dev.global_mem_size,
                         compute_units=cus, is_discrete=discrete,
                         _module=cl, _index=0,
+                        architecture=extra.get("architecture", ""),
+                        has_raytracing=extra.get("has_raytracing", False),
+                        has_nvenc=extra.get("has_nvenc", False),
+                        has_nvdec=extra.get("has_nvdec", False),
+                        memory_type=extra.get("memory_type", ""),
                     ))
                     seen.add(key)
             except Exception:
@@ -695,17 +1028,251 @@ def _detect_shared_vram_intel() -> int:
 
 
 def _enrich_shared_vram(gpus: List[GPUDevice]) -> None:
-    """Post-process: add shared VRAM info to Intel iGPUs detected by other probes."""
+    """Post-process: add shared VRAM and Vulkan info for ALL GPU vendors.
+
+    On Windows, every GPU (discrete or integrated) can use system RAM as
+    shared GPU memory.  The Task Manager reports this for NVIDIA, AMD, and
+    Intel alike — not just iGPUs.
+    """
     if platform.system() != "Windows":
         return
+
+    # Query WMI once for all adapters
+    wmi_data = _query_wmi_all_adapters()
+
     for gpu in gpus:
-        if gpu.vendor == "Intel" and not gpu.is_discrete and gpu.shared_memory_bytes == 0:
-            _, shared = _detect_vram_wmi(gpu.name)
+        if gpu.shared_memory_bytes > 0:
+            continue  # already enriched
+
+        # Match WMI adapter by name
+        matched = _match_wmi_adapter(gpu.name, wmi_data)
+        if matched:
+            dedicated = matched.get("dedicated", 0)
+            shared = matched.get("shared", 0)
             if shared > 0:
                 gpu.shared_memory_bytes = shared
-            # Also try to detect Vulkan version if not set
-            if not gpu.vulkan_version:
-                gpu.vulkan_version = _detect_vulkan_version_for(gpu.name)
+            # If WMI reports better dedicated VRAM and we have none
+            if dedicated > 0 and gpu.memory_bytes == 0:
+                gpu.memory_bytes = dedicated
+            # Driver version from WMI
+            drv = matched.get("driver_version", "")
+            if drv and not gpu.driver_version:
+                gpu.driver_version = drv
+
+        # Intel iGPU: fallback to estimated shared VRAM
+        if gpu.vendor == "Intel" and not gpu.is_discrete and gpu.shared_memory_bytes == 0:
+            gpu.shared_memory_bytes = _detect_shared_vram_intel()
+
+        # Vulkan version if not set
+        if not gpu.vulkan_version:
+            gpu.vulkan_version = _detect_vulkan_version_for(gpu.name)
+
+
+def _query_wmi_all_adapters() -> List[Dict[str, Any]]:
+    """Query WMI for ALL video adapters with dedicated + shared memory."""
+    if platform.system() != "Windows":
+        return []
+    try:
+        # Use DxDiag-style query for shared memory too
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_VideoController | "
+             "Select-Object Name,AdapterRAM,AdapterDACType,DriverVersion,"
+             "CurrentHorizontalResolution | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return []
+        import json as _json
+        data = _json.loads(r.stdout)
+        if isinstance(data, dict):
+            data = [data]
+
+        results = []
+        for ctrl in data:
+            name = ctrl.get("Name") or ""
+            adapter_ram = ctrl.get("AdapterRAM") or 0
+            if isinstance(adapter_ram, str):
+                adapter_ram = int(adapter_ram) if adapter_ram.isdigit() else 0
+            drv = ctrl.get("DriverVersion") or ""
+
+            # Shared memory estimation: Windows allocates ~half system RAM
+            shared = 0
+            try:
+                import psutil  # type: ignore[import-untyped]
+                total_ram = psutil.virtual_memory().total
+                # Windows typically allows up to half system RAM as shared GPU
+                shared = min(total_ram // 2, 32 * 1024 ** 3)
+            except ImportError:
+                pass
+
+            results.append({
+                "name": name,
+                "dedicated": adapter_ram,
+                "shared": shared,
+                "driver_version": drv,
+            })
+        return results
+    except Exception as exc:
+        log.debug("WMI adapter query failed: %s", exc)
+        return []
+
+
+def _match_wmi_adapter(gpu_name: str, wmi_data: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Match a GPUDevice name to a WMI adapter entry."""
+    hint = gpu_name.lower()
+    for adapter in wmi_data:
+        wmi_name = (adapter.get("name") or "").lower()
+        if hint in wmi_name or wmi_name in hint:
+            return adapter
+        # Token-based matching
+        for tok in ("gtx", "rtx", "radeon", "rx", "arc", "iris", "uhd", "quadro"):
+            if tok in hint and tok in wmi_name:
+                # Check model number too
+                import re
+                nums_gpu = set(re.findall(r"\d{3,}", hint))
+                nums_wmi = set(re.findall(r"\d{3,}", wmi_name))
+                if nums_gpu and nums_gpu & nums_wmi:
+                    return adapter
+    return None
+
+
+def _enrich_nvidia_smi(gpus: List[GPUDevice]) -> None:
+    """Enrich NVIDIA GPUs with driver, power, PCIe, clocks from nvidia-smi."""
+    nvidia_gpus = [g for g in gpus if g.vendor == "NVIDIA"]
+    if not nvidia_gpus:
+        return
+    try:
+        fields = ("index,name,driver_version,pcie.link.gen.max,"
+                  "pcie.link.width.max,power.limit,"
+                  "clocks.max.graphics,clocks.max.memory")
+        r = subprocess.run(
+            ["nvidia-smi", f"--query-gpu={fields}",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return
+
+        # Also grab CUDA driver version
+        cuda_ver = ""
+        try:
+            r2 = subprocess.run(
+                ["nvidia-smi", "--query-gpu=driver_version",
+                 "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # nvidia-smi header shows CUDA version
+            r3 = subprocess.run(
+                ["nvidia-smi"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r3.returncode == 0:
+                for line in r3.stdout.splitlines():
+                    if "CUDA Version" in line:
+                        import re
+                        m = re.search(r"CUDA Version:\s*([\d.]+)", line)
+                        if m:
+                            cuda_ver = m.group(1)
+                        break
+        except Exception:
+            pass
+
+        for line in r.stdout.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 8:
+                continue
+            idx, name, driver, pcie_gen, pcie_w, power, boost, mem_clk = parts[:8]
+
+            # Match to our GPUDevice
+            for gpu in nvidia_gpus:
+                if not _gpu_names_match(gpu.name, name):
+                    continue
+                if driver and driver != "[N/A]":
+                    gpu.driver_version = driver
+                if cuda_ver:
+                    gpu.cuda_driver_version = cuda_ver
+                try:
+                    pg = int(pcie_gen)
+                    if pg > 0:
+                        gpu.pcie_gen = pg
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    pw = int(pcie_w)
+                    if pw > 0:
+                        gpu.pcie_width = pw
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    pl = int(float(power))
+                    if pl > 0:
+                        gpu.power_limit_w = pl
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    bc = int(boost)
+                    if bc > 0:
+                        gpu.boost_clock_mhz = bc
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    mc = int(mem_clk)
+                    if mc > 0 and gpu.memory_clock_mhz == 0:
+                        gpu.memory_clock_mhz = mc
+                except (ValueError, TypeError):
+                    pass
+                break
+    except FileNotFoundError:
+        log.debug("nvidia-smi not found — NVIDIA enrichment skipped")
+    except Exception as exc:
+        log.debug("nvidia-smi enrichment failed: %s", exc)
+
+
+def _enrich_amd(gpus: List[GPUDevice]) -> None:
+    """Enrich AMD GPUs with architecture and rocm-smi data."""
+    amd_gpus = [g for g in gpus if g.vendor == "AMD"]
+    if not amd_gpus:
+        return
+
+    for gpu in amd_gpus:
+        if not gpu.architecture:
+            info = _classify_amd(gpu.name)
+            if info:
+                gpu.architecture = info.get("architecture", "")
+                if not gpu.has_nvenc:
+                    gpu.has_nvenc = info.get("has_nvenc", False)
+                if not gpu.has_nvdec:
+                    gpu.has_nvdec = info.get("has_nvdec", False)
+                if not gpu.has_raytracing:
+                    gpu.has_raytracing = info.get("has_raytracing", False)
+                if not gpu.memory_type:
+                    gpu.memory_type = info.get("memory_type", "")
+
+    # Try rocm-smi for driver/clock info
+    try:
+        r = subprocess.run(
+            ["rocm-smi", "--showdriverversion", "--showclocks", "--csv"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            for gpu in amd_gpus:
+                for line in r.stdout.splitlines():
+                    if "Driver version" in line:
+                        parts = line.split(",")
+                        if len(parts) >= 2:
+                            gpu.driver_version = parts[-1].strip()
+    except (FileNotFoundError, Exception):
+        pass
+
+    # Windows fallback: WMI driver version
+    if platform.system() == "Windows":
+        for gpu in amd_gpus:
+            if not gpu.driver_version:
+                wmi_data = _query_wmi_all_adapters()
+                matched = _match_wmi_adapter(gpu.name, wmi_data)
+                if matched and matched.get("driver_version"):
+                    gpu.driver_version = matched["driver_version"]
 
 
 def _detect_vulkan_version_for(gpu_name: str) -> str:

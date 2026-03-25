@@ -316,11 +316,65 @@ class Engine:
         if usable and self.gpu_enabled:
             best = usable[0]
             lines.append(f"║  GPU: {best.short_label()}")
+            # Memory breakdown
             if best.shared_memory_bytes:
                 lines.append(
                     f"║       VRAM: {best.memory_gb:.1f} GB dedicated + "
                     f"{best.shared_memory_gb:.1f} GB shared = {best.total_memory_gb:.1f} GB total"
                 )
+            # Architecture & compute
+            arch_parts: list[str] = []
+            if best.architecture:
+                arch_parts.append(best.architecture)
+            if best.cuda_capability:
+                arch_parts.append(f"CC {best.cuda_capability}")
+            if best.cuda_cores:
+                arch_parts.append(f"{best.cuda_cores} CUDA cores")
+            if arch_parts:
+                lines.append(f"║       Arch: {' | '.join(arch_parts)}")
+            # Acceleration features
+            feat_parts: list[str] = []
+            if best.has_tensor:
+                t = f"Tensor ×{best.tensor_cores}" if best.tensor_cores else "Tensor"
+                feat_parts.append(t)
+            if best.has_raytracing:
+                r = f"RT ×{best.rt_cores}" if best.rt_cores else "RT"
+                feat_parts.append(r)
+            if best.has_nvenc:
+                feat_parts.append("HW Encode")
+            if best.has_nvdec:
+                feat_parts.append("HW Decode")
+            if best.copy_engines:
+                feat_parts.append(f"Copy ×{best.copy_engines}")
+            if feat_parts:
+                lines.append(f"║       Features: {' | '.join(feat_parts)}")
+            # Clocks & memory type
+            clk_parts: list[str] = []
+            if best.boost_clock_mhz:
+                clk_parts.append(f"Boost: {best.boost_clock_mhz} MHz")
+            if best.memory_type:
+                clk_parts.append(best.memory_type)
+            if best.memory_bandwidth_gbps:
+                clk_parts.append(f"BW: {best.memory_bandwidth_gbps:.0f} GB/s")
+            if best.memory_bus_width:
+                clk_parts.append(f"{best.memory_bus_width}-bit bus")
+            if clk_parts:
+                lines.append(f"║       Clock: {' | '.join(clk_parts)}")
+            # PCIe & driver
+            hw_parts: list[str] = []
+            if best.pcie_gen:
+                pcie = f"PCIe Gen{best.pcie_gen}"
+                if best.pcie_width:
+                    pcie += f" x{best.pcie_width}"
+                hw_parts.append(pcie)
+            if best.power_limit_w:
+                hw_parts.append(f"TDP: {best.power_limit_w}W")
+            if best.driver_version:
+                hw_parts.append(f"Driver: {best.driver_version}")
+            if best.cuda_driver_version:
+                hw_parts.append(f"CUDA: {best.cuda_driver_version}")
+            if hw_parts:
+                lines.append(f"║       HW: {' | '.join(hw_parts)}")
             if best.vulkan_version:
                 disc = "discrete" if best.is_discrete else "integrated"
                 lines.append(f"║       Vulkan: {best.vulkan_version}  |  Type: {disc}")
@@ -440,7 +494,8 @@ class Engine:
         if usable and self.gpu_enabled:
             best = usable[0]
             vram = f"{best.total_memory_gb:.1f}GB" if best.total_memory_gb else f"{best.memory_gb:.1f}GB"
-            txt = f"GPU: {best.name} ({vram})"
+            arch = f" {best.architecture}" if best.architecture else ""
+            txt = f"GPU: {best.name}{arch} ({vram})"
             if self.multi_gpu and len(usable) > 1:
                 txt += f" +{len(usable) - 1}"
             parts.append(txt)

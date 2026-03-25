@@ -70,6 +70,22 @@ class TuneProfile:
     gpu_total_vram_gb: float = 0.0
     gpu_vulkan_version: str = ""
     gpu_is_discrete: bool = False
+    gpu_architecture: str = ""
+    gpu_cuda_capability: str = ""
+    gpu_cuda_cores: int = 0
+    gpu_tensor_cores: int = 0
+    gpu_rt_cores: int = 0
+    gpu_has_tensor: bool = False
+    gpu_has_raytracing: bool = False
+    gpu_has_hw_encode: bool = False
+    gpu_has_hw_decode: bool = False
+    gpu_memory_type: str = ""
+    gpu_memory_bandwidth_gbps: float = 0.0
+    gpu_boost_clock_mhz: int = 0
+    gpu_driver_version: str = ""
+    gpu_pcie_gen: int = 0
+    gpu_power_limit_w: int = 0
+    gpu_features: str = ""
 
     # Derived recommendations
     optimal_io_workers: int = 0
@@ -224,6 +240,46 @@ def auto_tune(*, quick: bool = True) -> TuneProfile:
     gpu_vk = gpu.get("vulkan_version", "")
     gpu_discrete = gpu.get("is_discrete", False)
 
+    # Extended GPU attributes from best GPU
+    gpu_arch = ""
+    gpu_cc = ""
+    gpu_cuda_cores = 0
+    gpu_tensor = 0
+    gpu_rt = 0
+    gpu_has_tensor = False
+    gpu_has_rt = False
+    gpu_has_enc = False
+    gpu_has_dec = False
+    gpu_mem_type = ""
+    gpu_bw = 0.0
+    gpu_boost = 0
+    gpu_drv = ""
+    gpu_pcie = 0
+    gpu_tdp = 0
+    gpu_feats = ""
+    try:
+        from pyaccelerate.gpu import best_gpu as _best_gpu
+        bg = _best_gpu()
+        if bg:
+            gpu_arch = bg.architecture
+            gpu_cc = bg.cuda_capability
+            gpu_cuda_cores = bg.cuda_cores
+            gpu_tensor = bg.tensor_cores
+            gpu_rt = bg.rt_cores
+            gpu_has_tensor = bg.has_tensor
+            gpu_has_rt = bg.has_raytracing
+            gpu_has_enc = bg.has_nvenc
+            gpu_has_dec = bg.has_nvdec
+            gpu_mem_type = bg.memory_type
+            gpu_bw = bg.memory_bandwidth_gbps
+            gpu_boost = bg.boost_clock_mhz
+            gpu_drv = bg.driver_version
+            gpu_pcie = bg.pcie_gen
+            gpu_tdp = bg.power_limit_w
+            gpu_feats = ", ".join(bg.features)
+    except Exception:
+        pass
+
     # Scores
     cs = _cpu_score(single_ops, multi_ops)
     ms = _memory_score(write_gbps, read_gbps)
@@ -266,6 +322,22 @@ def auto_tune(*, quick: bool = True) -> TuneProfile:
         gpu_total_vram_gb=gpu_total_gb,
         gpu_vulkan_version=gpu_vk,
         gpu_is_discrete=gpu_discrete,
+        gpu_architecture=gpu_arch,
+        gpu_cuda_capability=gpu_cc,
+        gpu_cuda_cores=gpu_cuda_cores,
+        gpu_tensor_cores=gpu_tensor,
+        gpu_rt_cores=gpu_rt,
+        gpu_has_tensor=gpu_has_tensor,
+        gpu_has_raytracing=gpu_has_rt,
+        gpu_has_hw_encode=gpu_has_enc,
+        gpu_has_hw_decode=gpu_has_dec,
+        gpu_memory_type=gpu_mem_type,
+        gpu_memory_bandwidth_gbps=gpu_bw,
+        gpu_boost_clock_mhz=gpu_boost,
+        gpu_driver_version=gpu_drv,
+        gpu_pcie_gen=gpu_pcie,
+        gpu_power_limit_w=gpu_tdp,
+        gpu_features=gpu_feats,
         optimal_io_workers=io_w,
         optimal_cpu_workers=cpu_w,
         optimal_gpu_strategy="score-weighted" if gpu_ok else "round-robin",

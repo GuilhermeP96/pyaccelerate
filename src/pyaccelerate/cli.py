@@ -169,17 +169,99 @@ def main(argv: list[str] | None = None) -> None:
         for i, g in enumerate(gpus):
             print(f"\n[{i}] {g.short_label()}")
             print(f"    Vendor: {g.vendor}  |  Backend: {g.backend}")
+            # Architecture & compute capability
+            if g.architecture or g.cuda_capability:
+                arch_line = "    Arch: "
+                parts = []
+                if g.architecture:
+                    parts.append(g.architecture)
+                if g.cuda_capability:
+                    parts.append(f"Compute Capability {g.cuda_capability}")
+                arch_line += " | ".join(parts)
+                print(arch_line)
+            # Core counts
+            if g.cuda_cores or g.tensor_cores or g.rt_cores:
+                core_line = "    Cores:"
+                if g.cuda_cores:
+                    core_line += f" CUDA={g.cuda_cores}"
+                if g.compute_units:
+                    core_line += f" (SMs={g.compute_units})"
+                if g.tensor_cores:
+                    core_line += f"  Tensor={g.tensor_cores}"
+                if g.rt_cores:
+                    core_line += f"  RT={g.rt_cores}"
+                print(core_line)
+            elif g.compute_units:
+                print(f"    CUs: {g.compute_units}")
+            # VRAM
             vram_line = f"    VRAM: {g.memory_gb:.1f} GB"
             if g.shared_memory_bytes:
                 vram_line += f" + {g.shared_memory_gb:.1f} GB shared"
                 vram_line += f" = {g.total_memory_gb:.1f} GB total"
-            vram_line += f"  |  CUs: {g.compute_units}"
             print(vram_line)
+            # Memory details
+            mem_parts = []
+            if g.memory_type:
+                mem_parts.append(g.memory_type)
+            if g.memory_bus_width:
+                mem_parts.append(f"{g.memory_bus_width}-bit bus")
+            if g.memory_bandwidth_gbps:
+                mem_parts.append(f"{g.memory_bandwidth_gbps:.0f} GB/s bandwidth")
+            if g.memory_clock_mhz:
+                mem_parts.append(f"{g.memory_clock_mhz} MHz mem clock")
+            if mem_parts:
+                print(f"    Memory: {' | '.join(mem_parts)}")
+            # Clocks
+            clk_parts = []
+            if g.clock_mhz:
+                clk_parts.append(f"Base: {g.clock_mhz} MHz")
+            if g.boost_clock_mhz:
+                clk_parts.append(f"Boost: {g.boost_clock_mhz} MHz")
+            if clk_parts:
+                print(f"    Clock: {' | '.join(clk_parts)}")
+            # Features
+            feat_parts = []
+            if g.has_tensor:
+                feat_parts.append("Tensor")
+            if g.has_raytracing:
+                feat_parts.append("Ray Tracing")
+            if g.has_nvenc:
+                feat_parts.append("HW Encode (NVENC/VCN)")
+            if g.has_nvdec:
+                feat_parts.append("HW Decode (NVDEC/VCN)")
+            if g.copy_engines:
+                feat_parts.append(f"Copy Engines ×{g.copy_engines}")
+            if feat_parts:
+                print(f"    Features: {', '.join(feat_parts)}")
+            # Hardware
+            hw_parts = []
+            if g.pcie_gen:
+                pcie = f"PCIe Gen{g.pcie_gen}"
+                if g.pcie_width:
+                    pcie += f" x{g.pcie_width}"
+                hw_parts.append(pcie)
+            if g.power_limit_w:
+                hw_parts.append(f"TDP {g.power_limit_w}W")
+            if g.l2_cache_bytes:
+                l2_mb = g.l2_cache_bytes / (1024 * 1024)
+                hw_parts.append(f"L2 {l2_mb:.1f} MB")
+            if hw_parts:
+                print(f"    Hardware: {' | '.join(hw_parts)}")
+            # Driver & Vulkan
+            drv_parts = []
+            if g.driver_version:
+                drv_parts.append(f"Driver: {g.driver_version}")
+            if g.cuda_driver_version:
+                drv_parts.append(f"CUDA: {g.cuda_driver_version}")
+            if drv_parts:
+                print(f"    Driver: {' | '.join(drv_parts)}")
             vk_line = f"    Discrete: {g.is_discrete}  |  Score: {g.score}"
             if g.vulkan_version:
                 vk_line += f"  |  Vulkan: {g.vulkan_version}"
             print(vk_line)
             print(f"    Usable: {g.usable}")
+            if g.features:
+                print(f"    Capabilities: {', '.join(g.features)}")
         hint = get_install_hint()
         if hint:
             print(f"\n{hint}")

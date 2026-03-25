@@ -89,11 +89,11 @@ def clamp_workers(desired: int, floor: int = 1) -> int:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def get_gpu_memory_stats() -> dict[str, float]:
-    """Return GPU memory stats (dedicated + shared VRAM) in GB.
+    """Return GPU memory and hardware stats for the best GPU.
 
-    Uses the GPU detection from ``pyaccelerate.gpu`` to report memory
-    for the best GPU.  Particularly useful for Intel iGPUs where shared
-    VRAM from system RAM is a significant portion of usable GPU memory.
+    Includes dedicated/shared VRAM, architecture info, core counts,
+    and feature flags — particularly useful for capacity planning
+    and LLM/AI workload sizing.
     """
     stats: dict[str, float] = {"gpu_available": 0.0}
     try:
@@ -108,6 +108,24 @@ def get_gpu_memory_stats() -> dict[str, float]:
         stats["gpu_is_discrete"] = 1.0 if gpu.is_discrete else 0.0
         if gpu.vulkan_version:
             stats["gpu_vulkan"] = 1.0
+        if gpu.cuda_cores:
+            stats["gpu_cuda_cores"] = float(gpu.cuda_cores)
+        if gpu.tensor_cores:
+            stats["gpu_tensor_cores"] = float(gpu.tensor_cores)
+        if gpu.rt_cores:
+            stats["gpu_rt_cores"] = float(gpu.rt_cores)
+        stats["gpu_has_tensor"] = 1.0 if gpu.has_tensor else 0.0
+        stats["gpu_has_raytracing"] = 1.0 if gpu.has_raytracing else 0.0
+        stats["gpu_has_hw_encode"] = 1.0 if gpu.has_nvenc else 0.0
+        stats["gpu_has_hw_decode"] = 1.0 if gpu.has_nvdec else 0.0
+        if gpu.memory_bandwidth_gbps:
+            stats["gpu_memory_bandwidth_gbps"] = gpu.memory_bandwidth_gbps
+        if gpu.boost_clock_mhz:
+            stats["gpu_boost_clock_mhz"] = float(gpu.boost_clock_mhz)
+        if gpu.power_limit_w:
+            stats["gpu_power_limit_w"] = float(gpu.power_limit_w)
+        if gpu.compute_units:
+            stats["gpu_compute_units"] = float(gpu.compute_units)
     except Exception:
         pass
     return stats
