@@ -65,6 +65,11 @@ class TuneProfile:
     gpu_available: bool = False
     gpu_gflops: float = 0.0
     gpu_backend: str = ""
+    gpu_dedicated_vram_gb: float = 0.0
+    gpu_shared_vram_gb: float = 0.0
+    gpu_total_vram_gb: float = 0.0
+    gpu_vulkan_version: str = ""
+    gpu_is_discrete: bool = False
 
     # Derived recommendations
     optimal_io_workers: int = 0
@@ -106,8 +111,11 @@ def hardware_fingerprint() -> str:
 
     try:
         from pyaccelerate.gpu import detect_all as _gpus
-        gpu_names = sorted(g.name for g in _gpus())
+        gpus = _gpus()
+        gpu_names = sorted(g.name for g in gpus)
         parts.append(f"gpu:{','.join(gpu_names) or 'none'}")
+        vk_parts = sorted(g.vulkan_version or "none" for g in gpus)
+        parts.append(f"vulkan:{','.join(vk_parts)}")
     except Exception:
         parts.append("gpu:unknown")
 
@@ -210,6 +218,11 @@ def auto_tune(*, quick: bool = True) -> TuneProfile:
     gpu_ok = gpu.get("available", False)
     gpu_gf = gpu.get("gflops", 0.0)
     gpu_be = gpu.get("backend", "")
+    gpu_ded_gb = gpu.get("dedicated_vram_gb", 0.0)
+    gpu_shared_gb = gpu.get("shared_vram_gb", 0.0)
+    gpu_total_gb = gpu.get("total_vram_gb", 0.0)
+    gpu_vk = gpu.get("vulkan_version", "")
+    gpu_discrete = gpu.get("is_discrete", False)
 
     # Scores
     cs = _cpu_score(single_ops, multi_ops)
@@ -248,6 +261,11 @@ def auto_tune(*, quick: bool = True) -> TuneProfile:
         gpu_available=gpu_ok,
         gpu_gflops=gpu_gf,
         gpu_backend=gpu_be,
+        gpu_dedicated_vram_gb=gpu_ded_gb,
+        gpu_shared_vram_gb=gpu_shared_gb,
+        gpu_total_vram_gb=gpu_total_gb,
+        gpu_vulkan_version=gpu_vk,
+        gpu_is_discrete=gpu_discrete,
         optimal_io_workers=io_w,
         optimal_cpu_workers=cpu_w,
         optimal_gpu_strategy="score-weighted" if gpu_ok else "round-robin",
@@ -403,6 +421,22 @@ def profile_summary(profile: Optional[TuneProfile] = None) -> str:
         f"(W {profile.memory_write_gbps:.1f} GB/s | R {profile.memory_read_gbps:.1f} GB/s)",
         f"║  GPU score:      {profile.gpu_score}/100  "
         f"({profile.gpu_gflops:.1f} GFLOPS — {profile.gpu_backend or 'N/A'})",
+    ]
+    # GPU VRAM details (show when GPU detected, even if compute unavailable)
+    if profile.gpu_available or profile.gpu_dedicated_vram_gb:
+        vram_parts = []
+        if profile.gpu_dedicated_vram_gb:
+            vram_parts.append(f"{profile.gpu_dedicated_vram_gb:.1f} GB dedicated")
+        if profile.gpu_shared_vram_gb:
+            vram_parts.append(f"{profile.gpu_shared_vram_gb:.1f} GB shared")
+        if profile.gpu_total_vram_gb:
+            vram_parts.append(f"{profile.gpu_total_vram_gb:.1f} GB total")
+        if vram_parts:
+            lines.append(f"║    VRAM:         {' + '.join(vram_parts)}")
+        vk_str = profile.gpu_vulkan_version or 'N/A'
+        disc_str = 'discrete' if profile.gpu_is_discrete else 'integrated'
+        lines.append(f"║    Vulkan:       {vk_str}  |  Type: {disc_str}")
+    lines += [
         "╠══════════════════════════════════════════════════════════════╣",
         f"║  IO workers:     {profile.optimal_io_workers}",
         f"║  CPU workers:    {profile.optimal_cpu_workers}",

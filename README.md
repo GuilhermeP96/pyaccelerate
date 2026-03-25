@@ -21,17 +21,17 @@
 | **`lockfree_queue`** | Lock-free MPMC queue & per-worker Chase-Lev deques for minimal contention |
 | **`adaptive`** | Adaptive scheduler — auto-scales workers based on latency, CPU pressure & memory pressure |
 | **`_native`** | Optional Cython / Rust (PyO3) accelerators for hot-path data structures |
-| **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI, ARM Adreno/Mali/Immortalis), ranking, multi-GPU dispatch |
+| **`gpu`** | Multi-vendor GPU detection (NVIDIA/CUDA, AMD/OpenCL, Intel oneAPI, ARM Adreno/Mali/Immortalis), ranking, multi-GPU dispatch, **shared VRAM detection, Vulkan version probing** |
 | **`npu`** | NPU detection & inference (OpenVINO, ONNX Runtime, DirectML, CoreML, ARM Hexagon/Samsung NPU/Tensor TPU/MediaTek APU) |
 | **`virt`** | Virtualization detection (Hyper-V, VT-x/AMD-V, KVM, WSL2, Docker, container detection) |
-| **`memory`** | Memory pressure monitoring, automatic worker clamping, reusable buffer pool |
+| **`memory`** | Memory pressure monitoring, automatic worker clamping, reusable buffer pool, **GPU memory stats (dedicated + shared VRAM)** |
 | **`profiler`** | `@timed`, `@profile_memory` decorators, `Timer` context manager, `Tracker` statistics |
 | **`benchmark`** | Built-in micro-benchmarks (CPU, threads, memory bandwidth, GPU compute) |
 | **`priority`** | OS-level task priority (IDLE → REALTIME) & energy profiles (POWER_SAVER → ULTRA_PERFORMANCE) |
 | **`max_mode`** | Maximum optimization mode — activates ALL resources simultaneously with OS tuning |
 | **`android`** | Android/Termux platform detection, ARM SoC database (25+ chipsets), big.LITTLE, thermal & battery |
 | **`iot`** | IoT / SBC detection (Raspberry Pi, Jetson, BeagleBone, Coral, Hailo, 30+ SoCs) |
-| **`autotune`** | Auto-tuning feedback loop — benchmark → config → re-tune, persistent profiles |
+| **`autotune`** | Auto-tuning feedback loop — benchmark → config → re-tune, persistent profiles, **hardware-safe limits & config clamping** |
 | **`metrics`** | Prometheus metrics exporter (`/metrics` HTTP endpoint, all subsystems) |
 | **`server`** | JSON HTTP & gRPC server for multi-language integration (Node.js, Go, Java, etc.) |
 | **`k8s`** | Kubernetes operator — pod info, GPU node capacity, auto-scaling, manifest generation |
@@ -175,12 +175,14 @@ set_energy_profile(EnergyProfile.PERFORMANCE)
 ```bash
 pyaccelerate info          # Full hardware report
 pyaccelerate benchmark     # Run micro-benchmarks
-pyaccelerate gpu           # GPU details
+pyaccelerate gpu           # GPU details (VRAM, shared VRAM, Vulkan version)
 pyaccelerate cpu           # CPU details
 pyaccelerate npu           # NPU details
 pyaccelerate android       # ARM/Android device details (SoC, clusters, thermal)
 pyaccelerate virt          # Virtualization info
-pyaccelerate memory        # Memory stats
+pyaccelerate memory        # Memory stats (system + GPU dedicated/shared)
+pyaccelerate limits        # Hardware-safe batch/worker limits
+pyaccelerate limits --json # Limits as JSON
 pyaccelerate status        # One-liner
 pyaccelerate priority      # Show current priority/energy
 pyaccelerate priority --preset max     # Apply max performance preset
@@ -406,6 +408,52 @@ profile = get_or_tune()
 
 # Apply to running process (sets workers, priority, energy)
 apply_profile()
+```
+
+### Hardware-Safe Configuration
+
+Prevent runaway concurrency on constrained hardware (iGPUs, LLM inference, Ollama, etc.):
+
+```python
+from pyaccelerate.autotune import hardware_safe_limits, clamp_config
+
+# Get hardware-derived upper bounds
+limits = hardware_safe_limits()
+# Discrete GPU:  {"batch_size": 32, "max_workers": N, "max_concurrent": 4}
+# Integrated GPU: {"batch_size": 8, "max_workers": 1, "max_concurrent": 2}
+# CPU-only:      {"batch_size": 5, "max_workers": 1, "max_concurrent": 2}
+
+# Clamp user/config values to safe maximums
+user_config = {"batch_size": 50, "max_workers": 4}
+safe = clamp_config(user_config)
+# iGPU → {"batch_size": 8, "max_workers": 1}
+```
+
+### GPU Memory Stats
+
+Query dedicated + shared VRAM for the best GPU:
+
+```python
+from pyaccelerate.memory import get_gpu_memory_stats
+
+stats = get_gpu_memory_stats()
+# {"gpu_available": 1.0, "gpu_dedicated_gb": 1.0,
+#  "gpu_shared_gb": 7.9, "gpu_total_gb": 8.9,
+#  "gpu_is_discrete": 0.0, "gpu_vulkan": 1.0}
+```
+
+### GPU Shared VRAM & Vulkan Detection
+
+The `GPUDevice` dataclass now exposes shared system memory and Vulkan version:
+
+```python
+from pyaccelerate.gpu import detect_all
+
+for g in detect_all():
+    print(f"{g.name}: {g.memory_gb:.1f} GB dedicated")
+    print(f"  Shared VRAM: {g.shared_memory_gb:.1f} GB")
+    print(f"  Total:       {g.total_memory_gb:.1f} GB")
+    print(f"  Vulkan:      {g.vulkan_version or 'not detected'}")
 ```
 
 ### Prometheus Metrics
@@ -635,6 +683,10 @@ python example_priority.py
 - [x] Adaptive scheduler (latency, CPU & memory pressure)
 - [x] Optional native accelerators (Cython + Rust/PyO3)
 - [x] Benchmark suite with IO/CPU/mixed workload comparisons
+- [x] Shared VRAM detection for integrated GPUs (Intel Iris Xe, etc.)
+- [x] Vulkan version probing per GPU
+- [x] Hardware-safe configuration limits (`hardware_safe_limits`, `clamp_config`)
+- [x] GPU memory stats API (`get_gpu_memory_stats`)
 
 ## Origin
 

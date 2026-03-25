@@ -316,6 +316,14 @@ class Engine:
         if usable and self.gpu_enabled:
             best = usable[0]
             lines.append(f"║  GPU: {best.short_label()}")
+            if best.shared_memory_bytes:
+                lines.append(
+                    f"║       VRAM: {best.memory_gb:.1f} GB dedicated + "
+                    f"{best.shared_memory_gb:.1f} GB shared = {best.total_memory_gb:.1f} GB total"
+                )
+            if best.vulkan_version:
+                disc = "discrete" if best.is_discrete else "integrated"
+                lines.append(f"║       Vulkan: {best.vulkan_version}  |  Type: {disc}")
             if len(usable) > 1:
                 mode = "multi-GPU ACTIVE" if self.multi_gpu else "available"
                 others = ", ".join(g.name for g in usable[1:])
@@ -431,7 +439,8 @@ class Engine:
         usable = self.usable_gpus
         if usable and self.gpu_enabled:
             best = usable[0]
-            txt = f"GPU: {best.name}"
+            vram = f"{best.total_memory_gb:.1f}GB" if best.total_memory_gb else f"{best.memory_gb:.1f}GB"
+            txt = f"GPU: {best.name} ({vram})"
             if self.multi_gpu and len(usable) > 1:
                 txt += f" +{len(usable) - 1}"
             parts.append(txt)

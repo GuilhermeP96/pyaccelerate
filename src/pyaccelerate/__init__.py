@@ -84,6 +84,7 @@ from pyaccelerate.autotune import (  # noqa: E402, F401
     auto_tune, get_or_tune, apply_profile,
     hardware_safe_limits, clamp_config,
 )
+from pyaccelerate.memory import get_gpu_memory_stats  # noqa: E402, F401
 from pyaccelerate.server import PyAccelerateServer  # noqa: E402, F401
 from pyaccelerate.work_stealing import (  # noqa: E402, F401
     WorkStealingScheduler,
@@ -115,4 +116,7 @@ __all__ = [
     "AdaptiveConfig",
     "WorkDeque",
     "MPMCQueue",
+    "hardware_safe_limits",
+    "clamp_config",
+    "get_gpu_memory_stats",
 ]

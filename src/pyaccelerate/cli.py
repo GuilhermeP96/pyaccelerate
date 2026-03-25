@@ -99,6 +99,10 @@ def main(argv: list[str] | None = None) -> None:
     k8s_p.add_argument("--manifest", action="store_true", help="Generate deployment YAML")
     k8s_p.add_argument("--json", action="store_true", dest="k8s_json", help="Output as JSON")
 
+    # limits
+    limits_p = sub.add_parser("limits", help="Show hardware-safe limits for batch/worker config")
+    limits_p.add_argument("--json", action="store_true", dest="limits_json", help="Output as JSON")
+
     # version
     sub.add_parser("version", help="Show version")
 
@@ -116,6 +120,17 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "version":
         from pyaccelerate import __version__
         print(f"pyaccelerate {__version__}")
+        return
+
+    if args.command == "limits":
+        from pyaccelerate.autotune import hardware_safe_limits
+        limits = hardware_safe_limits()
+        if args.limits_json:
+            print(json.dumps(limits, indent=2))
+        else:
+            print("Hardware-safe limits (max values):")
+            for k, v in limits.items():
+                print(f"  {k}: {v}")
         return
 
     if args.command == "info":
@@ -154,8 +169,16 @@ def main(argv: list[str] | None = None) -> None:
         for i, g in enumerate(gpus):
             print(f"\n[{i}] {g.short_label()}")
             print(f"    Vendor: {g.vendor}  |  Backend: {g.backend}")
-            print(f"    VRAM: {g.memory_gb:.1f} GB  |  CUs: {g.compute_units}")
-            print(f"    Discrete: {g.is_discrete}  |  Score: {g.score}")
+            vram_line = f"    VRAM: {g.memory_gb:.1f} GB"
+            if g.shared_memory_bytes:
+                vram_line += f" + {g.shared_memory_gb:.1f} GB shared"
+                vram_line += f" = {g.total_memory_gb:.1f} GB total"
+            vram_line += f"  |  CUs: {g.compute_units}"
+            print(vram_line)
+            vk_line = f"    Discrete: {g.is_discrete}  |  Score: {g.score}"
+            if g.vulkan_version:
+                vk_line += f"  |  Vulkan: {g.vulkan_version}"
+            print(vk_line)
             print(f"    Usable: {g.usable}")
         hint = get_install_hint()
         if hint:
@@ -363,7 +386,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "memory":
-        from pyaccelerate.memory import get_stats, get_pressure
+        from pyaccelerate.memory import get_stats, get_pressure, get_gpu_memory_stats
         stats = get_stats()
         pressure = get_pressure()
         print(f"Pressure: {pressure.name}")
@@ -371,6 +394,14 @@ def main(argv: list[str] | None = None) -> None:
             if k == "error":
                 continue
             print(f"  {k}: {v:.2f}")
+        gpu_mem = get_gpu_memory_stats()
+        if gpu_mem.get("gpu_available", 0.0) > 0:
+            print(f"\n── GPU Memory ──")
+            print(f"  Dedicated:  {gpu_mem.get('gpu_dedicated_gb', 0.0):.1f} GB")
+            print(f"  Shared:     {gpu_mem.get('gpu_shared_gb', 0.0):.1f} GB")
+            print(f"  Total:      {gpu_mem.get('gpu_total_gb', 0.0):.1f} GB")
+            print(f"  Discrete:   {'yes' if gpu_mem.get('gpu_is_discrete', 0.0) else 'no'}")
+            print(f"  Vulkan:     {'yes' if gpu_mem.get('gpu_vulkan', 0.0) else 'no'}")
         return
 
     if args.command == "priority":

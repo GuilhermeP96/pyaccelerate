@@ -133,23 +133,38 @@ def _collect_gpu() -> str:
         return "".join(parts)
 
     samples_mem: list[tuple[dict[str, str], float]] = []
+    samples_shared: list[tuple[dict[str, str], float]] = []
+    samples_total: list[tuple[dict[str, str], float]] = []
     samples_score: list[tuple[dict[str, str], float]] = []
     samples_usable: list[tuple[dict[str, str], float]] = []
     samples_cu: list[tuple[dict[str, str], float]] = []
+    samples_vulkan: list[tuple[dict[str, str], float]] = []
 
     for i, g in enumerate(gpus):
         lbl = {"device": g.name, "index": str(i), "backend": g.backend, "vendor": g.vendor}
         samples_mem.append((lbl, g.memory_gb * (1024 ** 3)))
+        if g.shared_memory_bytes:
+            samples_shared.append((lbl, g.shared_memory_bytes))
+        if g.total_memory_bytes:
+            samples_total.append((lbl, g.total_memory_bytes))
         samples_score.append((lbl, g.score))
         samples_usable.append((lbl, int(g.usable)))
         if g.compute_units:
             samples_cu.append((lbl, g.compute_units))
+        if g.vulkan_version:
+            samples_vulkan.append((lbl, 1))
 
-    parts.append(_gauge_multi("gpu_memory_bytes", "GPU memory in bytes", samples_mem))
+    parts.append(_gauge_multi("gpu_memory_bytes", "GPU dedicated memory in bytes", samples_mem))
+    if samples_shared:
+        parts.append(_gauge_multi("gpu_shared_memory_bytes", "GPU shared memory (system RAM) in bytes", samples_shared))
+    if samples_total:
+        parts.append(_gauge_multi("gpu_total_memory_bytes", "GPU total memory (dedicated + shared) in bytes", samples_total))
     parts.append(_gauge_multi("gpu_score", "GPU compute score", samples_score))
     parts.append(_gauge_multi("gpu_usable", "1 if GPU is usable for compute", samples_usable))
     if samples_cu:
         parts.append(_gauge_multi("gpu_compute_units", "GPU compute units", samples_cu))
+    if samples_vulkan:
+        parts.append(_gauge_multi("gpu_vulkan", "1 if GPU supports Vulkan", samples_vulkan))
     return "".join(parts)
 
 

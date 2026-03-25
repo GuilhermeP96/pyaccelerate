@@ -189,6 +189,11 @@ def activate_max_mode(
         "gpu_count": len(gpus),
         "gpu_usable": len([g for g in gpus if g.usable]),
         "gpu_best": gpus[0].short_label() if gpus else "N/A",
+        "gpu_dedicated_vram_gb": round(gpus[0].memory_gb, 1) if gpus else 0,
+        "gpu_shared_vram_gb": round(gpus[0].shared_memory_gb, 1) if gpus else 0,
+        "gpu_total_vram_gb": round(gpus[0].total_memory_gb, 1) if gpus else 0,
+        "gpu_vulkan_version": gpus[0].vulkan_version if gpus else "",
+        "gpu_is_discrete": gpus[0].is_discrete if gpus else False,
         "npu_count": len(npus),
         "npu_usable": len([n for n in npus if n.usable]),
         "ram_total_gb": round(ms.get("system_total_gb", 0), 1),
@@ -513,6 +518,16 @@ class MaxMode:
             "╠══════════════════════════════════════════════════════════════╣",
             f"║  CPU:     {m.get('cpu', 'N/A')}",
             f"║  GPU:     {m.get('gpu_usable', 0)} usable ({m.get('gpu_best', 'N/A')})",
+        ]
+        if m.get('gpu_shared_vram_gb', 0):
+            lines.append(
+                f"║           VRAM: {m.get('gpu_dedicated_vram_gb', 0)} GB dedicated + "
+                f"{m.get('gpu_shared_vram_gb', 0)} GB shared = {m.get('gpu_total_vram_gb', 0)} GB total"
+            )
+        if m.get('gpu_vulkan_version'):
+            disc = 'discrete' if m.get('gpu_is_discrete') else 'integrated'
+            lines.append(f"║           Vulkan: {m['gpu_vulkan_version']}  |  Type: {disc}")
+        lines += [
             f"║  NPU:     {m.get('npu_usable', 0)} usable",
             f"║  RAM:     {m.get('ram_total_gb', 0)} GB total, {m.get('ram_available_gb', 0)} GB avail",
             f"║  IO Pool: {m.get('io_pool_size', 0)} threads",

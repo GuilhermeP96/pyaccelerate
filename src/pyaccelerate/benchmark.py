@@ -203,14 +203,28 @@ def run_gpu(
     gpu = best_gpu()
     backend = gpu.backend if gpu else "none"
 
-    if backend == "cuda":
-        return _bench_cuda(size, iterations, gpu)
-    elif backend == "opencl":
-        return _bench_opencl(size, iterations, gpu)
-    elif backend == "intel":
-        return _bench_intel(size, iterations, gpu)
+    # GPU memory topology (available regardless of compute backend)
+    mem_info = {}
+    if gpu:
+        mem_info = {
+            "dedicated_vram_gb": round(gpu.memory_gb, 2),
+            "shared_vram_gb": round(gpu.shared_memory_gb, 2),
+            "total_vram_gb": round(gpu.total_memory_gb, 2),
+            "vulkan_version": gpu.vulkan_version or "",
+            "is_discrete": gpu.is_discrete,
+        }
 
-    return {"benchmark": "gpu_compute", "available": False, "note": "Unsupported backend"}
+    if backend == "cuda":
+        result = _bench_cuda(size, iterations, gpu)
+    elif backend == "opencl":
+        result = _bench_opencl(size, iterations, gpu)
+    elif backend == "intel":
+        result = _bench_intel(size, iterations, gpu)
+    else:
+        result = {"benchmark": "gpu_compute", "available": False, "note": "Unsupported backend"}
+
+    result.update(mem_info)
+    return result
 
 
 def _bench_cuda(size: int, iterations: int, gpu: Any) -> Dict[str, Any]:

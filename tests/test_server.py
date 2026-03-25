@@ -174,9 +174,10 @@ class TestHTTPEndpoints:
         assert "pyaccelerate_cpu" in body
 
     def test_tune_profile_none(self):
-        status, body = _get(self.port, "/api/v1/tune/profile")
-        assert status == 200
-        assert body.get("profiled") is False
+        with patch("pyaccelerate.autotune.load_profile", return_value=None):
+            status, body = _get(self.port, "/api/v1/tune/profile")
+            assert status == 200
+            assert body.get("profiled") is False
 
     def test_404(self):
         status, body = _get(self.port, "/api/v1/nonexistent")
