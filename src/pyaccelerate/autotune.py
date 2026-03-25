@@ -414,3 +414,74 @@ def profile_summary(profile: Optional[TuneProfile] = None) -> str:
         "╚══════════════════════════════════════════════════════════════╝",
     ]
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Hardware-safe configuration clamping
+# ═══════════════════════════════════════════════════════════════════════════
+
+def hardware_safe_limits() -> Dict[str, int]:
+    """Return hardware-safe upper limits for batch/worker configuration.
+
+    These limits are derived from detected GPU type and system memory.
+    Applications should use ``clamp_config()`` to enforce them.
+
+    Key insight from production use (Ollama / LLM inference on Intel Iris Xe):
+    - iGPU with shared VRAM: keep batches small (VRAM contention with OS)
+    - Discrete GPU: larger batches are fine
+    - LLM servers with Parallel=1: multiple workers cause timeout cascading
+    - CPU-only: conservative to avoid thermal throttling
+    """
+    try:
+        from pyaccelerate.gpu.detector import best_gpu
+        gpu = best_gpu()
+    except Exception:
+        gpu = None
+
+    try:
+        import psutil  # type: ignore[import-untyped]
+        ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+    except ImportError:
+        ram_gb = 8.0
+
+    if gpu and gpu.usable and gpu.is_discrete:
+        # Discrete GPU: generous limits
+        return {
+            "batch_size": 32,
+            "max_workers": max(2, int(ram_gb // 4)),
+            "max_concurrent": 4,
+        }
+    elif gpu and gpu.usable:
+        # Integrated GPU (iGPU) with compute backend (Vulkan, OpenCL, etc.)
+        # Shared VRAM = conservative batches, single worker for serial APIs
+        return {
+            "batch_size": 8,
+            "max_workers": 1,
+            "max_concurrent": 2,
+        }
+    else:
+        # CPU-only
+        return {
+            "batch_size": 5,
+            "max_workers": 1,
+            "max_concurrent": 2,
+        }
+
+
+def clamp_config(config: Dict[str, int], limits: Optional[Dict[str, int]] = None) -> Dict[str, int]:
+    """Clamp user/config values to hardware-safe maximums.
+
+    For each key present in both *config* and *limits*, the returned value
+    is ``min(config[key], limits[key])``  — i.e. the config can *reduce*
+    but never *exceed* the hardware limits.
+
+    Keys in *config* that are not in *limits* pass through unchanged.
+
+    If *limits* is ``None``, calls ``hardware_safe_limits()``.
+    """
+    if limits is None:
+        limits = hardware_safe_limits()
+    return {
+        k: min(v, limits[k]) if k in limits else v
+        for k, v in config.items()
+    }

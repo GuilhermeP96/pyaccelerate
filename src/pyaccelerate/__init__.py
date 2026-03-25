@@ -80,7 +80,10 @@ from pyaccelerate.priority import (  # noqa: E402, F401
     balanced,
     power_saver,
 )
-from pyaccelerate.autotune import auto_tune, get_or_tune, apply_profile  # noqa: E402, F401
+from pyaccelerate.autotune import (  # noqa: E402, F401
+    auto_tune, get_or_tune, apply_profile,
+    hardware_safe_limits, clamp_config,
+)
 from pyaccelerate.server import PyAccelerateServer  # noqa: E402, F401
 from pyaccelerate.work_stealing import (  # noqa: E402, F401
     WorkStealingScheduler,

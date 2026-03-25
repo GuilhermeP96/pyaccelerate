@@ -85,6 +85,35 @@ def clamp_workers(desired: int, floor: int = 1) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  GPU memory stats
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_gpu_memory_stats() -> dict[str, float]:
+    """Return GPU memory stats (dedicated + shared VRAM) in GB.
+
+    Uses the GPU detection from ``pyaccelerate.gpu`` to report memory
+    for the best GPU.  Particularly useful for Intel iGPUs where shared
+    VRAM from system RAM is a significant portion of usable GPU memory.
+    """
+    stats: dict[str, float] = {"gpu_available": 0.0}
+    try:
+        from pyaccelerate.gpu.detector import best_gpu
+        gpu = best_gpu()
+        if gpu is None:
+            return stats
+        stats["gpu_available"] = 1.0
+        stats["gpu_dedicated_gb"] = gpu.memory_gb
+        stats["gpu_shared_gb"] = gpu.shared_memory_gb
+        stats["gpu_total_gb"] = gpu.total_memory_gb
+        stats["gpu_is_discrete"] = 1.0 if gpu.is_discrete else 0.0
+        if gpu.vulkan_version:
+            stats["gpu_vulkan"] = 1.0
+    except Exception:
+        pass
+    return stats
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Buffer pool (slab allocator)
 # ═══════════════════════════════════════════════════════════════════════════
 

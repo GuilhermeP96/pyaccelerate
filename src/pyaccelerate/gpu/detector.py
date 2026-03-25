@@ -33,11 +33,13 @@ class GPUDevice:
     """Represents one detected GPU compute device."""
 
     name: str = ""
-    backend: str = ""          # "cuda", "opencl", "intel", "none"
+    backend: str = ""          # "cuda", "opencl", "intel", "vulkan", "none"
     vendor: str = ""           # "NVIDIA", "Intel", "AMD", "unknown"
-    memory_bytes: int = 0      # VRAM (global memory) in bytes
+    memory_bytes: int = 0      # VRAM (dedicated/global memory) in bytes
+    shared_memory_bytes: int = 0  # Shared VRAM (iGPU using system RAM) in bytes
     compute_units: int = 0     # SMs / CUs / EUs
     is_discrete: bool = False  # discrete vs integrated
+    vulkan_version: str = ""   # e.g. "1.2.154" if Vulkan-capable
     _module: Any = None        # runtime handle (cupy, pyopencl ctx, dpctl device)
     _index: int = 0            # device ordinal in its backend
 
@@ -46,9 +48,30 @@ class GPUDevice:
         return self.memory_bytes / (1024 ** 3) if self.memory_bytes else 0.0
 
     @property
+    def shared_memory_gb(self) -> float:
+        return self.shared_memory_bytes / (1024 ** 3) if self.shared_memory_bytes else 0.0
+
+    @property
+    def total_memory_bytes(self) -> int:
+        """Total addressable memory: dedicated + shared (for iGPUs)."""
+        return self.memory_bytes + self.shared_memory_bytes
+
+    @property
+    def total_memory_gb(self) -> float:
+        return self.total_memory_bytes / (1024 ** 3) if self.total_memory_bytes else 0.0
+
+    @property
     def score(self) -> int:
-        """Composite power score for ranking. Discrete GPUs get a large bonus."""
-        s = self.memory_bytes // (1024 * 1024)  # MB of VRAM
+        """Composite power score for ranking.
+
+        Discrete GPUs get a large bonus.  Integrated GPUs with shared VRAM
+        get a smaller bonus proportional to usable shared memory (capped at
+        half the weight of dedicated VRAM to avoid over-ranking iGPUs).
+        """
+        s = self.memory_bytes // (1024 * 1024)  # MB of dedicated VRAM
+        # Shared VRAM counts at half weight (system RAM is slower than GDDR)
+        if self.shared_memory_bytes and not self.is_discrete:
+            s += self.shared_memory_bytes // (1024 * 1024) // 2
         s += self.compute_units * 50
         if self.is_discrete:
             s += 100_000
@@ -61,10 +84,14 @@ class GPUDevice:
 
     def short_label(self) -> str:
         mem = f"{self.memory_gb:.1f} GB" if self.memory_bytes else "?"
-        return f"{self.name} ({self.backend.upper()}, {mem})"
+        extra = ""
+        if self.shared_memory_bytes and not self.is_discrete:
+            extra = f" +{self.shared_memory_gb:.1f} GB shared"
+        vk = " Vulkan" if self.vulkan_version else ""
+        return f"{self.name} ({self.backend.upper()}, {mem}{extra}{vk})"
 
     def as_dict(self) -> Dict[str, str]:
-        return {
+        d = {
             "name": self.name,
             "backend": self.backend,
             "vendor": self.vendor,
@@ -74,6 +101,12 @@ class GPUDevice:
             "score": str(self.score),
             "usable": str(self.usable),
         }
+        if self.shared_memory_bytes:
+            d["shared_memory"] = f"{self.shared_memory_gb:.1f} GB"
+            d["total_memory"] = f"{self.total_memory_gb:.1f} GB"
+        if self.vulkan_version:
+            d["vulkan_version"] = self.vulkan_version
+        return d
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -165,6 +198,12 @@ def detect_all() -> List[GPUDevice]:
 
         # ── SBC / IoT GPU (VideoCore, Tegra, Vivante, etc.) ──
         gpus.extend(_probe_sbc_gpu(seen))
+
+        # ── Vulkan (Windows / Desktop — covers Intel Iris Xe, etc.) ──
+        gpus.extend(_probe_vulkan(seen))
+
+        # ── Enrich existing GPUs with shared VRAM & Vulkan info ──
+        _enrich_shared_vram(gpus)
 
         # ── OS-level fallback ──
         if not gpus:
@@ -517,6 +556,178 @@ def _gpu_names_match(name_a: str, name_b: str) -> bool:
         if token in a and token in b:
             return True
     return False
+
+
+# ── Vulkan probe (Windows / Desktop) ────────────────────────────────────
+
+def _probe_vulkan(seen: set[str]) -> List[GPUDevice]:
+    """Detect Vulkan-capable GPUs via ``vulkaninfo``.
+
+    This covers desktop Intel iGPUs (Iris Xe, UHD) with Vulkan support
+    that lack CuPy, OpenCL or dpctl — the typical Ollama + Vulkan scenario.
+    Also enriches *already-detected* GPUs with Vulkan version info by
+    returning an empty list but annotating the ``seen`` set entries.
+    """
+    gpus: List[GPUDevice] = []
+    output = _run_vulkaninfo()
+    if not output:
+        return gpus
+
+    # Parse vulkaninfo output.  Supports both --summary and full formats:
+    #   apiVersion     = 4202650 (1.2.154)   OR   apiVersion    = 1.2.154
+    #   deviceName     = Intel(R) Iris(R) Xe Graphics
+    current_name = ""
+    current_api = ""
+    for line in output.splitlines():
+        stripped = line.strip()
+        if "deviceName" in stripped and "=" in stripped:
+            current_name = stripped.split("=", 1)[-1].strip()
+        elif "apiVersion" in stripped and "=" in stripped:
+            raw = stripped.split("=", 1)[-1].strip()
+            # May be "4202650 (1.2.154)" or just "1.2.154"
+            if "(" in raw:
+                current_api = raw.split("(")[-1].rstrip(")")
+            else:
+                current_api = raw
+        # When we have both, emit a device
+        if current_name and current_api:
+            key = current_name.lower().strip()
+            vendor, discrete = _vendor_from_name(current_name)
+            if key not in seen:
+                mem, shared = _detect_vram_wmi(current_name)
+                gpus.append(GPUDevice(
+                    name=current_name,
+                    backend="vulkan",
+                    vendor=vendor,
+                    memory_bytes=mem,
+                    shared_memory_bytes=shared,
+                    is_discrete=discrete,
+                    vulkan_version=current_api,
+                ))
+                seen.add(key)
+            current_name = ""
+            current_api = ""
+
+    if gpus:
+        log.info("Vulkan probe found %d GPU(s): %s",
+                 len(gpus), ", ".join(g.short_label() for g in gpus))
+    return gpus
+
+
+def _run_vulkaninfo() -> str:
+    """Run vulkaninfo and return its stdout, or empty string on failure."""
+    # Try --summary first (faster), fall back to full output
+    for args in (["vulkaninfo", "--summary"], ["vulkaninfo"]):
+        try:
+            r = subprocess.run(args, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0 and "deviceName" in r.stdout:
+                return r.stdout
+        except FileNotFoundError:
+            log.debug("vulkaninfo not found in PATH — Vulkan probe skipped")
+            return ""
+        except Exception:
+            continue
+    return ""
+
+
+def _detect_vram_wmi(gpu_name_hint: str = "") -> Tuple[int, int]:
+    """Detect dedicated and shared VRAM via WMI (Windows only).
+
+    Returns ``(dedicated_bytes, shared_bytes)``.
+    """
+    if platform.system() != "Windows":
+        return 0, 0
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_VideoController | "
+             "Select-Object Name, AdapterRAM, "
+             "AdapterDACType | ConvertTo-Json -Compress"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return 0, 0
+
+        import json as _json
+        data = _json.loads(r.stdout)
+        if isinstance(data, dict):
+            data = [data]
+
+        hint = gpu_name_hint.lower()
+        for ctrl in data:
+            name = (ctrl.get("Name") or "").lower()
+            if hint and hint not in name and name not in hint:
+                continue
+            adapter_ram = ctrl.get("AdapterRAM") or 0
+            if isinstance(adapter_ram, str):
+                adapter_ram = int(adapter_ram) if adapter_ram.isdigit() else 0
+            # For Intel iGPU: AdapterRAM is typically the small dedicated
+            # portion (128 MB).  Total usable VRAM is much larger (shared
+            # from system RAM), reported by DxDiag.  We query it via
+            # another CIM class if available.
+            shared = 0
+            if "intel" in name:
+                shared = _detect_shared_vram_intel()
+            return adapter_ram, shared
+        return 0, 0
+    except Exception as exc:
+        log.debug("WMI VRAM detection failed: %s", exc)
+        return 0, 0
+
+
+def _detect_shared_vram_intel() -> int:
+    """Detect Intel iGPU shared VRAM (system RAM allocated to GPU).
+
+    On Windows, ``Win32_VideoController.AdapterRAM`` only reports the small
+    dedicated portion (128 MB for Iris Xe).  The actual usable VRAM is
+    shared from system RAM and reported by DxDiag as "Shared Memory".
+    We approximate via available system RAM minus a safety margin.
+    """
+    try:
+        import psutil  # type: ignore[import-untyped]
+        total = psutil.virtual_memory().total
+        # Intel iGPU can use up to half of system RAM (BIOS-dependent).
+        # Conservative estimate: min(half of total RAM, 8 GB).
+        shared = min(total // 2, 8 * 1024 ** 3)
+        return shared
+    except ImportError:
+        return 0
+
+
+def _enrich_shared_vram(gpus: List[GPUDevice]) -> None:
+    """Post-process: add shared VRAM info to Intel iGPUs detected by other probes."""
+    if platform.system() != "Windows":
+        return
+    for gpu in gpus:
+        if gpu.vendor == "Intel" and not gpu.is_discrete and gpu.shared_memory_bytes == 0:
+            _, shared = _detect_vram_wmi(gpu.name)
+            if shared > 0:
+                gpu.shared_memory_bytes = shared
+            # Also try to detect Vulkan version if not set
+            if not gpu.vulkan_version:
+                gpu.vulkan_version = _detect_vulkan_version_for(gpu.name)
+
+
+def _detect_vulkan_version_for(gpu_name: str) -> str:
+    """Query vulkaninfo for a specific GPU's Vulkan API version."""
+    output = _run_vulkaninfo()
+    if not output:
+        return ""
+    hint = gpu_name.lower()
+    current_api = ""
+    for line in output.splitlines():
+        stripped = line.strip()
+        if "apiVersion" in stripped and "=" in stripped:
+            raw = stripped.split("=", 1)[-1].strip()
+            if "(" in raw:
+                current_api = raw.split("(")[-1].rstrip(")")
+            else:
+                current_api = raw
+        elif "deviceName" in stripped and "=" in stripped:
+            name = stripped.split("=", 1)[-1].strip().lower()
+            if hint in name or name in hint:
+                return current_api
+    return ""
 
 
 # ── OS-level fallback ───────────────────────────────────────────────────
