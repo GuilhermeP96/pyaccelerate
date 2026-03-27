@@ -334,6 +334,129 @@ def _format_summary_table(results: list[BenchmarkResult]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# NPU inference benchmarks
+# ---------------------------------------------------------------------------
+
+def bench_npu(quick: bool = False, repeats: int = 3) -> list[BenchmarkResult]:
+    """Benchmark NPU vs CPU inference on ONNX models of varying size."""
+    from pyaccelerate.npu import npu_available
+    if not npu_available():
+        return []
+
+    try:
+        from pyaccelerate.benchmark import _create_bench_onnx_model
+        import numpy as np
+    except ImportError:
+        return []
+
+    configs = [
+        # (label, batch, input_dim, hidden_dim, output_dim, num_layers, iterations)
+        ("MLP-8L (1024→1024→512)", 1, 1024, 1024, 512, 8, 200 if not quick else 60),
+        ("MLP-16L (1024→1024→512)", 1, 1024, 1024, 512, 16, 150 if not quick else 50),
+        ("MLP-24L (1024→1024→512)", 1, 1024, 1024, 512, 24, 100 if not quick else 40),
+        ("MLP-32L (1024→1024→512)", 1, 1024, 1024, 512, 32, 80 if not quick else 30),
+    ]
+
+    results: list[BenchmarkResult] = []
+
+    for label, batch, in_d, hid_d, out_d, n_layers, iters in configs:
+        import tempfile, os
+        model_bytes = _create_bench_onnx_model(
+            batch=batch, input_dim=in_d, hidden_dim=hid_d, output_dim=out_d,
+            num_layers=n_layers,
+        )
+        tmp = tempfile.NamedTemporaryFile(suffix=".onnx", delete=False)
+        tmp.write(model_bytes)
+        tmp.close()
+        model_path = tmp.name
+
+        rng = np.random.RandomState(0)
+        input_data = {"X": rng.randn(batch, in_d).astype(np.float32)}
+        warmup = max(iters // 10, 5)
+
+        for _ in range(repeats):
+            # NPU
+            try:
+                from pyaccelerate.npu.inference import InferenceSession
+                sess = InferenceSession(model_path, device="NPU")
+                for _ in range(warmup):
+                    sess.predict(input_data)
+                t0 = time.perf_counter()
+                for _ in range(iters):
+                    sess.predict(input_data)
+                elapsed = time.perf_counter() - t0
+                results.append(BenchmarkResult("NPU", label, "NPU (OpenVINO)", iters, elapsed))
+            except Exception:
+                pass
+
+            # CPU
+            try:
+                from pyaccelerate.npu.inference import InferenceSession
+                sess = InferenceSession(model_path, device="CPU", backend="cpu")
+                for _ in range(warmup):
+                    sess.predict(input_data)
+                t0 = time.perf_counter()
+                for _ in range(iters):
+                    sess.predict(input_data)
+                elapsed = time.perf_counter() - t0
+                results.append(BenchmarkResult("NPU", label, "CPU (ONNX Runtime)", iters, elapsed))
+            except Exception:
+                pass
+
+        try:
+            os.unlink(model_path)
+        except OSError:
+            pass
+
+    return results
+
+
+def _format_npu_table(results: list[BenchmarkResult]) -> str:
+    """Format NPU benchmark results as a Markdown table."""
+    groups: dict[str, list[BenchmarkResult]] = {}
+    for r in results:
+        groups.setdefault(r.workload, []).append(r)
+
+    lines = [
+        "",
+        "### NPU Inference — NPU vs CPU",
+        "",
+        "| Model | Runner | Time (s) | Avg (ms) | Speedup | Infer/sec |",
+        "|-------|--------|----------|----------|---------|-----------|",
+    ]
+
+    for label, rows in groups.items():
+        # Best of repeats per runner
+        by_runner: dict[str, list[BenchmarkResult]] = {}
+        for r in rows:
+            by_runner.setdefault(r.runner, []).append(r)
+
+        best_per_runner: dict[str, BenchmarkResult] = {}
+        for runner, rlist in by_runner.items():
+            best_per_runner[runner] = min(rlist, key=lambda r: r.elapsed)
+
+        cpu_row = best_per_runner.get("CPU (ONNX Runtime)")
+        npu_row = best_per_runner.get("NPU (OpenVINO)")
+
+        for runner_name in ["CPU (ONNX Runtime)", "NPU (OpenVINO)"]:
+            row = best_per_runner.get(runner_name)
+            if not row:
+                continue
+            avg_ms = row.elapsed / row.tasks * 1000
+            speedup = ""
+            if runner_name == "NPU (OpenVINO)" and cpu_row:
+                sp = cpu_row.elapsed / row.elapsed
+                speedup = f"{sp:.1f}×"
+            else:
+                speedup = "1.0× (baseline)"
+            lines.append(
+                f"| {label} | {runner_name} | {row.elapsed:.3f} | {avg_ms:.2f} | {speedup} | {row.throughput:.0f} |"
+            )
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # JSON export
 # ---------------------------------------------------------------------------
 
@@ -361,12 +484,13 @@ def main():
     parser.add_argument("--io", action="store_true", help="IO-bound only")
     parser.add_argument("--cpu", action="store_true", help="CPU-bound only")
     parser.add_argument("--mixed", action="store_true", help="Mixed only")
+    parser.add_argument("--npu", action="store_true", help="NPU inference only")
     parser.add_argument("--quick", action="store_true", help="Fewer tasks (CI)")
     parser.add_argument("--repeats", type=int, default=3, help="Repetitions per bench")
     parser.add_argument("--json", type=str, default="", help="Export JSON path")
     args = parser.parse_args()
 
-    run_all = not (args.io or args.cpu or args.mixed)
+    run_all = not (args.io or args.cpu or args.mixed or args.npu)
 
     workers = os.cpu_count() or 4
 
@@ -399,6 +523,15 @@ def main():
     if run_all or args.mixed:
         print("\n▸ Mixed workload benchmark …")
         all_results.extend(bench_mixed(n_mixed, args.repeats, workers))
+
+    if run_all or args.npu:
+        print("\n▸ NPU inference benchmark …")
+        npu_results = bench_npu(quick=args.quick, repeats=args.repeats)
+        if npu_results:
+            all_results.extend(npu_results)
+            print(_format_npu_table(npu_results))
+        else:
+            print("  (no usable NPU — skipped)")
 
     # Print detailed tables
     print("\n" + "=" * 65)

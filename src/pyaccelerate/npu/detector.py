@@ -87,6 +87,14 @@ _KNOWN_TOPS: Dict[str, float] = {
     "arrow lake": 13.0,
     "lunar lake": 48.0,
     "panther lake": 60.0,
+    # Intel Core Ultra series (by CPU brand string)
+    "core ultra 9 2": 48.0,   # Core Ultra 9 200V (Lunar Lake)
+    "core ultra 7 2": 13.0,   # Core Ultra 7 200V/U (Arrow Lake)
+    "core ultra 5 2": 13.0,   # Core Ultra 5 200V/U (Arrow Lake)
+    "core ultra 9 1": 11.0,   # Core Ultra 9 100 (Meteor Lake)
+    "core ultra 7 1": 11.0,   # Core Ultra 7 100 (Meteor Lake)
+    "core ultra 5 1": 11.0,   # Core Ultra 5 100 (Meteor Lake)
+    "core ultra": 13.0,       # Generic Core Ultra fallback
     # AMD
     "ryzen ai 9 hx 370": 50.0,
     "ryzen ai 9 365": 50.0,
@@ -198,7 +206,7 @@ _KNOWN_TOPS: Dict[str, float] = {
 
 def _estimate_tops(name: str) -> float:
     """Estimate TOPS from device/CPU name using known hardware DB."""
-    nl = name.lower()
+    nl = name.lower().replace("(r)", "").replace("(tm)", "")
     for pattern, tops in _KNOWN_TOPS.items():
         if pattern in nl:
             return tops
@@ -695,13 +703,13 @@ def _probe_windows_npu(seen: set[str]) -> List[NPUDevice]:
         # Check for NPU in PnP devices (class = NeuralProcessor or MachineLearning)
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "Get-PnpDevice -Class 'MachineLearningModel','NeuralProcessor','AI','Processor' "
+             "Get-PnpDevice -Class 'MachineLearningModel','NeuralProcessor','AI','Processor','ComputeAccelerator' "
              "-ErrorAction SilentlyContinue | "
              "Where-Object { $_.FriendlyName -match 'NPU|Neural|AI' } | "
              "Select-Object -ExpandProperty FriendlyName"],
             capture_output=True, text=True, timeout=10,
         )
-        if r.returncode == 0:
+        if r.stdout and r.stdout.strip():
             for line in r.stdout.strip().splitlines():
                 name = line.strip()
                 if not name or name.lower() in seen:

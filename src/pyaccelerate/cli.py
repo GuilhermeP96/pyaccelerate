@@ -137,6 +137,7 @@ def main(argv: list[str] | None = None) -> None:
         from pyaccelerate.engine import Engine
         engine = Engine()
         print(engine.summary())
+        _offer_missing_deps(engine)
         return
 
     if args.command == "status":
@@ -639,6 +640,76 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  Direction: {rec.scale_direction}")
         print(f"  Reason: {rec.reason}")
         return
+
+
+def _offer_missing_deps(engine) -> None:
+    """After 'info', offer to install missing GPU/NPU frameworks."""
+    import re
+    import subprocess as sp
+
+    packages: list[str] = []
+
+    # GPU missing?
+    if engine.gpus and not engine.usable_gpus:
+        from pyaccelerate.gpu import get_install_hint
+        hint = get_install_hint()
+        if hint:
+            packages.extend(re.findall(r"pip install (\S+)", hint))
+
+    # NPU missing?
+    if engine.npus and not engine.usable_npus:
+        from pyaccelerate.npu import get_install_hint as npu_hint
+        hint = npu_hint()
+        if hint:
+            packages.extend(re.findall(r"pip install (\S+)", hint))
+
+    packages = sorted(set(packages))
+    if not packages or not sys.stdin.isatty():
+        return
+
+    print(f"\nMissing libraries detected for your hardware.")
+    print(f"Suggested packages:")
+    for i, pkg in enumerate(packages, 1):
+        print(f"  [{i}] {pkg}")
+    print(f"  [A] Install all")
+    print(f"  [N] Skip")
+
+    try:
+        choice = input("\nWhich packages to install? [A/1/2/.../N]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    if not choice or choice.upper() == "N":
+        return
+
+    to_install: list[str] = []
+    if choice.upper() == "A":
+        to_install = packages
+    else:
+        for part in choice.replace(",", " ").split():
+            try:
+                idx = int(part) - 1
+                if 0 <= idx < len(packages):
+                    to_install.append(packages[idx])
+            except ValueError:
+                pass
+
+    if not to_install:
+        print("No valid selection.")
+        return
+
+    print(f"\nInstalling: {', '.join(to_install)} ...")
+    result = sp.run(
+        [sys.executable, "-m", "pip", "install", *to_install],
+        timeout=300,
+    )
+    if result.returncode == 0:
+        print("\nDone! Run 'pyaccelerate info' again to verify.")
+    else:
+        print("\nInstallation failed. Try manually:")
+        for pkg in to_install:
+            print(f"  pip install {pkg}")
 
 
 if __name__ == "__main__":

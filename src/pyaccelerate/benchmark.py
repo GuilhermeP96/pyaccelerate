@@ -310,6 +310,159 @@ def _bench_intel(size: int, iterations: int, gpu: Any) -> Dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  NPU benchmark
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _create_bench_onnx_model(
+    batch: int = 1,
+    input_dim: int = 512,
+    hidden_dim: int = 512,
+    output_dim: int = 256,
+    num_layers: int = 1,
+) -> bytes:
+    """Build a multi-layer MatMul→Relu ONNX model in memory (no file I/O)."""
+    import numpy as np
+    import onnx
+    from onnx import TensorProto, helper
+
+    rng = np.random.RandomState(42)
+    initializers = []
+    nodes = []
+    prev_output = "X"
+    prev_dim = input_dim
+
+    for i in range(num_layers):
+        is_last = (i == num_layers - 1)
+        out_d = output_dim if is_last else hidden_dim
+        w_name = f"W{i}"
+        w = rng.randn(prev_dim, out_d).astype(np.float32) * 0.02
+        tensor = onnx.TensorProto()
+        tensor.name = w_name
+        tensor.data_type = TensorProto.FLOAT
+        tensor.dims.extend(w.shape)
+        tensor.raw_data = w.tobytes()
+        initializers.append(tensor)
+        mm_out = f"mm_{i}"
+        nodes.append(helper.make_node("MatMul", [prev_output, w_name], [mm_out]))
+        if is_last:
+            prev_output = mm_out
+        else:
+            relu_out = f"relu_{i}"
+            nodes.append(helper.make_node("Relu", [mm_out], [relu_out]))
+            prev_output = relu_out
+        prev_dim = out_d
+
+    X = helper.make_tensor_value_info("X", TensorProto.FLOAT, [batch, input_dim])
+    Y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [batch, output_dim])
+
+    # Rename last output to Y
+    nodes[-1].output[0] = "Y"
+
+    graph = helper.make_graph(nodes, "bench_model", [X], [Y], initializer=initializers)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    return model.SerializeToString()
+
+
+def run_npu(
+    batch: int = 1,
+    input_dim: int = 512,
+    iterations: int = 200,
+    warmup: int = 20,
+) -> Dict[str, Any]:
+    """NPU inference benchmark: compare NPU vs CPU on a small ONNX model.
+
+    Returns timing for both NPU and CPU backends, plus the speedup ratio.
+    """
+    import numpy as np
+    from pyaccelerate.npu import npu_available
+
+    if not npu_available():
+        return {
+            "benchmark": "npu_inference",
+            "available": False,
+            "note": "No usable NPU — skipped",
+        }
+
+    try:
+        import onnx  # noqa: F401
+    except ImportError:
+        return {
+            "benchmark": "npu_inference",
+            "available": True,
+            "note": "onnx package not installed — skipped (pip install onnx)",
+        }
+
+    model_bytes = _create_bench_onnx_model(batch=batch, input_dim=input_dim, num_layers=8)
+
+    # Write to a temp file (ONNX Runtime / OpenVINO need a path)
+    import tempfile, os
+    tmp = tempfile.NamedTemporaryFile(suffix=".onnx", delete=False)
+    tmp.write(model_bytes)
+    tmp.close()
+    model_path = tmp.name
+
+    rng = np.random.RandomState(0)
+    input_data = {"X": rng.randn(batch, input_dim).astype(np.float32)}
+
+    results: Dict[str, Any] = {
+        "benchmark": "npu_inference",
+        "available": True,
+        "batch": batch,
+        "input_dim": input_dim,
+        "model": f"MLP-8L ({input_dim}→512→256) × {iterations}",
+        "iterations": iterations,
+    }
+
+    # ── NPU timing ──
+    try:
+        from pyaccelerate.npu.inference import InferenceSession
+        sess_npu = InferenceSession(model_path, device="NPU")
+        for _ in range(warmup):
+            sess_npu.predict(input_data)
+        t0 = time.perf_counter()
+        for _ in range(iterations):
+            sess_npu.predict(input_data)
+        npu_elapsed = time.perf_counter() - t0
+        results["npu_backend"] = sess_npu.backend_name
+        results["npu_time_s"] = round(npu_elapsed, 4)
+        results["npu_avg_ms"] = round(npu_elapsed / iterations * 1000, 3)
+        results["npu_throughput"] = int(iterations / npu_elapsed) if npu_elapsed > 0 else 0
+    except Exception as exc:
+        results["npu_error"] = str(exc)
+        npu_elapsed = 0.0
+
+    # ── CPU timing (same model, CPU backend) ──
+    try:
+        from pyaccelerate.npu.inference import InferenceSession
+        sess_cpu = InferenceSession(model_path, device="CPU", backend="cpu")
+        for _ in range(warmup):
+            sess_cpu.predict(input_data)
+        t0 = time.perf_counter()
+        for _ in range(iterations):
+            sess_cpu.predict(input_data)
+        cpu_elapsed = time.perf_counter() - t0
+        results["cpu_time_s"] = round(cpu_elapsed, 4)
+        results["cpu_avg_ms"] = round(cpu_elapsed / iterations * 1000, 3)
+        results["cpu_throughput"] = int(iterations / cpu_elapsed) if cpu_elapsed > 0 else 0
+    except Exception as exc:
+        results["cpu_error"] = str(exc)
+        cpu_elapsed = 0.0
+
+    # ── Speedup ──
+    if npu_elapsed > 0 and cpu_elapsed > 0:
+        results["speedup"] = round(cpu_elapsed / npu_elapsed, 2)
+
+    # Cleanup
+    try:
+        os.unlink(model_path)
+    except OSError:
+        pass
+
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Full suite
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -329,5 +482,6 @@ def run_all(quick: bool = True) -> Dict[str, Any]:
     results["thread_latency"] = run_thread_pool_latency(tasks=200 * scale)
     results["memory"] = run_memory_bandwidth(size_mb=16 * scale, iterations=3 * scale)
     results["gpu"] = run_gpu(size=1_000_000 * scale, iterations=20 * scale)
+    results["npu"] = run_npu(iterations=50 * scale, warmup=10 * scale)
 
     return results
