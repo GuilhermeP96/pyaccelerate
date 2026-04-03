@@ -29,6 +29,7 @@ from pyaccelerate.gpu.detector import (
     reset_cache,
 )
 from pyaccelerate.gpu.dispatch import dispatch, multi_gpu_map
+from pyaccelerate.gpu.hasher import gpu_hash_file, gpu_hash_batch, gpu_hash_available
 
 __all__ = [
     "GPUDevice",
@@ -41,4 +42,7 @@ __all__ = [
     "reset_cache",
     "dispatch",
     "multi_gpu_map",
+    "gpu_hash_file",
+    "gpu_hash_batch",
+    "gpu_hash_available",
 ]

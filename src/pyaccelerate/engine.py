@@ -666,3 +666,95 @@ class Engine:
             max_workers=self._cpu_workers * 2,
         )
         return AdaptiveScheduler(config=cfg, num_workers=self._cpu_workers)
+
+    # ── Pipeline (v0.10.0) ──────────────────────────────────────────────
+
+    def run_pipeline(
+        self,
+        stages: Any,
+        items: Iterable[Any],
+    ) -> Any:
+        """Run a multi-stage pipeline with backpressure.
+
+        Parameters
+        ----------
+        stages
+            A :class:`Pipeline` instance or a list of :class:`Stage` objects.
+        items
+            Iterable of input items for the first stage.
+
+        Returns
+        -------
+        PipelineResult
+            Contains outputs and per-stage statistics.
+        """
+        from pyaccelerate.pipeline import Pipeline, Stage
+        if isinstance(stages, (list, tuple)):
+            pipeline = Pipeline(stages=stages)
+        else:
+            pipeline = stages
+        return pipeline.run(items)
+
+    # ── Retry (v0.10.0) ─────────────────────────────────────────────────
+
+    def submit_with_retry(
+        self,
+        fn: Callable[..., T],
+        *args: Any,
+        max_attempts: int = 3,
+        backoff_base: float = 1.0,
+        **kwargs: Any,
+    ) -> T:
+        """Submit a function with automatic retry on failure.
+
+        Uses :class:`RetryPolicy` from ``pyaccelerate.retry``.
+        """
+        from pyaccelerate.retry import retry_call, RetryPolicy
+        policy = RetryPolicy(max_attempts=max_attempts, backoff_base=backoff_base)
+        return retry_call(fn, args=args, kwargs=kwargs, policy=policy)
+
+    # ── Rate-limited parallel (v0.10.0) ─────────────────────────────────
+
+    def rate_limited_parallel(
+        self,
+        fn: Callable[..., Any],
+        items: Iterable[tuple],
+        rate: float = 10.0,
+        burst: int = 0,
+        max_concurrent: int = 0,
+        **kwargs: Any,
+    ) -> int:
+        """Run tasks in parallel with a global rate limit.
+
+        Combines the thread pool from ``run_parallel`` with a
+        :class:`RateLimiter` to cap throughput.
+
+        Parameters
+        ----------
+        rate
+            Maximum operations per second.
+        burst
+            Token bucket capacity (0 = same as rate).
+        """
+        from pyaccelerate.rate_limiter import RateLimiter
+
+        if max_concurrent <= 0:
+            max_concurrent = clamp_workers(recommend_workers(io_bound=True))
+
+        limiter = RateLimiter(rate=rate, burst=burst or int(rate))
+
+        def limited_fn(*a: Any, **kw: Any) -> Any:
+            limiter.acquire()
+            return fn(*a, **kw)
+
+        return _run_parallel(limited_fn, items, max_concurrent, **kwargs)
+
+    # ── Health check (v0.10.0) ──────────────────────────────────────────
+
+    def health_check(self, include_gpu: bool = True) -> Any:
+        """Run aggregated health checks (CPU, memory, disk, GPU).
+
+        Returns a :class:`HealthReport` with per-component status.
+        """
+        from pyaccelerate.health import health_check as _hc
+        return _hc(include_gpu=include_gpu)

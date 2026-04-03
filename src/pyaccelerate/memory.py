@@ -185,6 +185,20 @@ class BufferPool:
                 "max_buffers": self.max_buffers,
             }
 
+    def prefill(self, count: int = 0) -> int:
+        """Pre-allocate buffers up to *count* (default: max_buffers).
+
+        Returns the number of buffers actually created.
+        """
+        target = min(count or self.max_buffers, self.max_buffers)
+        created = 0
+        with self._lock:
+            while len(self._pool) < target:
+                self._pool.append(bytearray(self.buffer_size))
+                self._allocated += 1
+                created += 1
+        return created
+
     def clear(self) -> None:
         """Release all pooled buffers."""
         with self._lock:

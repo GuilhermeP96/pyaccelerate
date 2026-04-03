@@ -23,6 +23,12 @@ Modules
 - **lockfree_queue** : Lock-free MPMC & Chase-Lev work-stealing deques
 - **work_stealing**  : Work-stealing scheduler (Tokio / Go / ForkJoinPool style)
 - **adaptive**       : Adaptive scheduler — latency, CPU & memory pressure driven
+- **pipeline**       : Typed pipeline stages with backpressure
+- **retry**          : Configurable retry with exponential backoff & jitter
+- **circuit_breaker**: Circuit breaker pattern for flaky operations
+- **rate_limiter**   : Token-bucket rate limiter
+- **health**         : Aggregated system health checks (CPU, memory, GPU, disk)
+- **plugins**        : Lightweight plugin discovery via entry points
 - **_native**        : Optional Cython / Rust accelerators for hot-path data structures
 
 Quick start::
@@ -94,6 +100,12 @@ from pyaccelerate.work_stealing import (  # noqa: E402, F401
 )
 from pyaccelerate.adaptive import AdaptiveScheduler, AdaptiveConfig  # noqa: E402, F401
 from pyaccelerate.lockfree_queue import WorkDeque, MPMCQueue  # noqa: E402, F401
+from pyaccelerate.pipeline import Pipeline, Stage, PipelineResult  # noqa: E402, F401
+from pyaccelerate.retry import RetryPolicy, retry, retry_call  # noqa: E402, F401
+from pyaccelerate.circuit_breaker import CircuitBreaker, CircuitOpenError  # noqa: E402, F401
+from pyaccelerate.rate_limiter import RateLimiter  # noqa: E402, F401
+from pyaccelerate.health import health_check, HealthReport, Status as HealthStatus  # noqa: E402, F401
+from pyaccelerate.plugins import discover as discover_plugins, register as register_plugin  # noqa: E402, F401
 
 __all__ = [
     "__version__",
@@ -119,4 +131,18 @@ __all__ = [
     "hardware_safe_limits",
     "clamp_config",
     "get_gpu_memory_stats",
+    "Pipeline",
+    "Stage",
+    "PipelineResult",
+    "RetryPolicy",
+    "retry",
+    "retry_call",
+    "CircuitBreaker",
+    "CircuitOpenError",
+    "RateLimiter",
+    "health_check",
+    "HealthReport",
+    "HealthStatus",
+    "discover_plugins",
+    "register_plugin",
 ]
