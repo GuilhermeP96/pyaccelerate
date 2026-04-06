@@ -781,18 +781,18 @@ MIT — see [LICENSE](LICENSE).
 <!-- PYPI-STATS-START -->
 ## 📊 PyPI Download Statistics
 
-> Last updated: 2026-03-30 06:41 UTC (refreshed every Monday via GitHub Actions — [run manually](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/pypi-stats.yml))
+> Last updated: 2026-04-06 06:41 UTC (refreshed every Monday via GitHub Actions — [run manually](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/pypi-stats.yml))
 
 | Period      | Downloads |
 |-------------|-----------|
-| Last day    | 7 |
-| Last week   | 354 |
-| Last month  | 1,465 |
-| **Total**   | **4,698** |
+| Last day    | 2 |
+| Last week   | 116 |
+| Last month  | 865 |
+| **Total**   | **5,252** |
 
 ### By Python version (top 5)
 
 | Version | Downloads |
 |---------|-----------|
-| Python 3 | 205 |
+| Python 3 | 227 |
 <!-- PYPI-STATS-END -->
