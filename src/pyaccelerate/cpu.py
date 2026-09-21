@@ -24,6 +24,34 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("pyaccelerate.cpu")
 
 
+def _safe_run(args, *, timeout=5, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run wrapper that forcefully kills on timeout (Windows-safe)."""
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    try:
+        proc = subprocess.Popen(args, **kwargs)
+    except FileNotFoundError:
+        raise
+    except Exception:
+        return subprocess.CompletedProcess(args, 1, "", "")
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=2)
+        except Exception:
+            stdout, stderr = "", ""
+        return subprocess.CompletedProcess(args, 1, stdout or "", stderr or "")
+    except Exception:
+        proc.kill()
+        return subprocess.CompletedProcess(args, 1, "", "")
+    return subprocess.CompletedProcess(args, proc.returncode, stdout or "", stderr or "")
+
+
 # ─────────────────────────────────────────────────────────────────────────
 #  CPU Info Descriptor
 # ─────────────────────────────────────────────────────────────────────────
@@ -215,35 +243,74 @@ def detect() -> CPUInfo:
 # ── Platform helpers ─────────────────────────────────────────────────────
 
 def _windows_brand() -> str:
+    # 1. Registry (fastest, no subprocess)
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-CimInstance Win32_Processor).Name"],
-            capture_output=True, text=True, timeout=10,
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+        )
+        brand, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+        winreg.CloseKey(key)
+        if brand and brand.strip():
+            return brand.strip()
+    except Exception:
+        pass
+    # 2. wmic fallback (lighter than powershell)
+    try:
+        r = _safe_run(
+            ["wmic", "cpu", "get", "Name", "/value"],
+            capture_output=True, text=True, timeout=5,
         )
         if r.returncode == 0:
-            return r.stdout.strip().split("\n")[0].strip()
+            for line in r.stdout.splitlines():
+                if line.startswith("Name="):
+                    return line.split("=", 1)[1].strip()
     except Exception:
         pass
     return ""
 
 
 def _windows_flags() -> List[str]:
-    """Best-effort ISA flag detection on Windows via WMI + registry."""
+    """Best-effort ISA flag detection on Windows via registry + wmic fallback."""
     flags: List[str] = []
+    desc = ""
+    # 1. Registry (fastest)
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-CimInstance Win32_Processor).Description"],
-            capture_output=True, text=True, timeout=10,
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
         )
-        if r.returncode == 0:
-            desc = r.stdout.strip().lower()
-            for kw in ("sse", "sse2", "sse3", "sse4", "avx", "avx2", "avx512"):
-                if kw in desc:
-                    flags.append(kw)
+        ident, _ = winreg.QueryValueEx(key, "Identifier")
+        # FeatureSet bitmask
+        try:
+            feat, _ = winreg.QueryValueEx(key, "FeatureSet")
+        except Exception:
+            feat = 0
+        winreg.CloseKey(key)
+        desc = (ident or "").lower()
+        # Feature bits: SSE2=bit 26 of EDX via CPUID, but registry Identifier
+        # has "Family X Model Y" — not ISA. Use brand + heuristics.
     except Exception:
         pass
+    # 2. wmic fallback for description
+    if not desc:
+        try:
+            r = _safe_run(
+                ["wmic", "cpu", "get", "Description", "/value"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if line.startswith("Description="):
+                        desc = line.split("=", 1)[1].strip().lower()
+                        break
+        except Exception:
+            pass
+    for kw in ("sse", "sse2", "sse3", "sse4", "avx", "avx2", "avx512"):
+        if kw in desc:
+            flags.append(kw)
     return flags
 
 
@@ -290,7 +357,7 @@ def _linux_cpuinfo(
 
 def _macos_brand() -> str:
     try:
-        r = subprocess.run(
+        r = _safe_run(
             ["sysctl", "-n", "machdep.cpu.brand_string"],
             capture_output=True, text=True, timeout=5,
         )

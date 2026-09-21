@@ -25,6 +25,36 @@ from typing import Any, Dict, List, Optional, Tuple
 log = logging.getLogger("pyaccelerate.npu.detector")
 
 
+def _safe_run(args, *, timeout=5, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run wrapper that forcefully kills on timeout (Windows-safe)."""
+    capture = kwargs.pop("capture_output", False)
+    if capture:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    kwargs.setdefault("stdout", subprocess.PIPE)
+    kwargs.setdefault("stderr", subprocess.PIPE)
+    kwargs.setdefault("text", True)
+    try:
+        proc = subprocess.Popen(args, **kwargs)
+    except FileNotFoundError:
+        raise
+    except Exception:
+        return subprocess.CompletedProcess(args, 1, "", "")
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=2)
+        except Exception:
+            stdout, stderr = "", ""
+        return subprocess.CompletedProcess(args, 1, stdout or "", stderr or "")
+    except Exception:
+        proc.kill()
+        return subprocess.CompletedProcess(args, 1, "", "")
+    return subprocess.CompletedProcess(args, proc.returncode, stdout or "", stderr or "")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  NPU Device Descriptor
 # ═══════════════════════════════════════════════════════════════════════════
@@ -604,7 +634,7 @@ def _probe_sbc_npu(seen: set[str]) -> List[NPUDevice]:
     # ── Intel Movidius NCS2 ──
     try:
         from pathlib import Path
-        r = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5)
+        r = _safe_run(["lsusb"], capture_output=True, text=True, timeout=5)
         if r.returncode == 0:
             for line in r.stdout.splitlines():
                 if "03e7:2485" in line:  # Movidius Myriad X VPU ID
@@ -701,15 +731,18 @@ def _probe_windows_npu(seen: set[str]) -> List[NPUDevice]:
     npus: List[NPUDevice] = []
     try:
         # Check for NPU in PnP devices (class = NeuralProcessor or MachineLearning)
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
+        r = _safe_run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
              "Get-PnpDevice -Class 'MachineLearningModel','NeuralProcessor','AI','Processor','ComputeAccelerator' "
              "-ErrorAction SilentlyContinue | "
              "Where-Object { $_.FriendlyName -match 'NPU|Neural|AI' } | "
              "Select-Object -ExpandProperty FriendlyName"],
-            capture_output=True, text=True, timeout=10,
+            # Keep OS fallback bounded for callers such as the metrics
+            # endpoint; CPU-name inference below still detects integrated
+            # NPUs if Device Manager is slow or unavailable.
+            capture_output=True, text=True, timeout=3,
         )
-        if r.stdout and r.stdout.strip():
+        if r.returncode == 0 and r.stdout and r.stdout.strip():
             for line in r.stdout.strip().splitlines():
                 name = line.strip()
                 if not name or name.lower() in seen:
@@ -783,7 +816,7 @@ def _probe_macos_npu(seen: set[str]) -> List[NPUDevice]:
     npus: List[NPUDevice] = []
     try:
         # Check for ANE via ioreg
-        r = subprocess.run(
+        r = _safe_run(
             ["ioreg", "-c", "AppleARMIODevice", "-r", "-d", "1"],
             capture_output=True, text=True, timeout=5,
         )
@@ -791,7 +824,7 @@ def _probe_macos_npu(seen: set[str]) -> List[NPUDevice]:
 
         if not has_ane:
             # All Apple Silicon has ANE
-            r2 = subprocess.run(
+            r2 = _safe_run(
                 ["sysctl", "-n", "machdep.cpu.brand_string"],
                 capture_output=True, text=True, timeout=5,
             )

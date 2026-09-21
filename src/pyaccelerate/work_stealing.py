@@ -23,7 +23,7 @@ import os
 import random
 import threading
 import time
-from concurrent.futures import Future
+from concurrent.futures import Future, InvalidStateError
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
 
@@ -160,9 +160,15 @@ class _Worker:
             return
         try:
             result = task.fn(*task.args, **task.kwargs)
-            task.future.set_result(result)
+            try:
+                task.future.set_result(result)
+            except InvalidStateError:
+                pass  # Future was cancelled between check and set
         except BaseException as exc:
-            task.future.set_exception(exc)
+            try:
+                task.future.set_exception(exc)
+            except InvalidStateError:
+                pass  # Future was cancelled between check and set
         finally:
             self.completed += 1
             self.total_latency_ns += time.monotonic_ns() - task.submit_ns

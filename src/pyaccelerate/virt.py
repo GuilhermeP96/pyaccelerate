@@ -26,6 +26,36 @@ from typing import List, Optional
 log = logging.getLogger("pyaccelerate.virt")
 
 
+def _safe_run(args, *, timeout=5, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run wrapper that forcefully kills on timeout (Windows-safe)."""
+    capture = kwargs.pop("capture_output", False)
+    if capture:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    kwargs.setdefault("stdout", subprocess.PIPE)
+    kwargs.setdefault("stderr", subprocess.PIPE)
+    kwargs.setdefault("text", True)
+    try:
+        proc = subprocess.Popen(args, **kwargs)
+    except FileNotFoundError:
+        raise
+    except Exception:
+        return subprocess.CompletedProcess(args, 1, "", "")
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=2)
+        except Exception:
+            stdout, stderr = "", ""
+        return subprocess.CompletedProcess(args, 1, stdout or "", stderr or "")
+    except Exception:
+        proc.kill()
+        return subprocess.CompletedProcess(args, 1, "", "")
+    return subprocess.CompletedProcess(args, proc.returncode, stdout or "", stderr or "")
+
+
 @dataclass
 class VirtInfo:
     """Detected virtualization capabilities of the host."""
@@ -127,35 +157,48 @@ def reset_cache() -> None:
 
 def _detect_windows(vi: VirtInfo) -> None:
     """Detect Hyper-V, VT-x, WSL on Windows."""
-    # Hyper-V
+    # Hyper-V — check via registry (no powershell)
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V).State"],
-            capture_output=True, text=True, timeout=15,
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization",
         )
-        if r.returncode == 0:
-            state = r.stdout.strip().lower()
-            vi.hyperv_available = state in ("enabled", "enablepending")
-            vi.hyperv_running = state == "enabled"
+        winreg.CloseKey(key)
+        vi.hyperv_available = True
+        vi.hyperv_running = True
     except Exception:
-        pass
+        # Fallback: check service
+        try:
+            r = _safe_run(
+                ["sc", "query", "vmcompute"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and "RUNNING" in r.stdout:
+                vi.hyperv_available = True
+                vi.hyperv_running = True
+            elif r.returncode == 0:
+                vi.hyperv_available = True
+        except Exception:
+            pass
 
-    # VT-x / AMD-V
+    # VT-x / AMD-V — check via wmic
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled"],
-            capture_output=True, text=True, timeout=10,
+        r = _safe_run(
+            ["wmic", "cpu", "get", "VirtualizationFirmwareEnabled", "/value"],
+            capture_output=True, text=True, timeout=5,
         )
         if r.returncode == 0:
-            vi.vtx_enabled = r.stdout.strip().lower() == "true"
+            for line in r.stdout.splitlines():
+                if "VirtualizationFirmwareEnabled=TRUE" in line.upper():
+                    vi.vtx_enabled = True
+                    break
     except Exception:
         pass
 
     # WSL
     try:
-        r = subprocess.run(
+        r = _safe_run(
             ["wsl", "--status"], capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0:
@@ -179,7 +222,7 @@ def _detect_linux(vi: VirtInfo) -> None:
 
     # Are we inside a VM?
     try:
-        r = subprocess.run(
+        r = _safe_run(
             ["systemd-detect-virt", "--vm"],
             capture_output=True, text=True, timeout=5,
         )
@@ -192,7 +235,7 @@ def _detect_linux(vi: VirtInfo) -> None:
 def _detect_macos(vi: VirtInfo) -> None:
     """Detect Apple Hypervisor Framework on macOS."""
     try:
-        r = subprocess.run(
+        r = _safe_run(
             ["sysctl", "-n", "kern.hv_support"],
             capture_output=True, text=True, timeout=5,
         )
@@ -206,7 +249,7 @@ def _detect_container_runtimes(vi: VirtInfo) -> None:
     """Check if Docker / Podman CLI tools are available."""
     for tool, attr in [("docker", "docker_available"), ("podman", "podman_available")]:
         try:
-            r = subprocess.run(
+            r = _safe_run(
                 [tool, "--version"],
                 capture_output=True, text=True, timeout=5,
             )

@@ -28,6 +28,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -266,15 +267,20 @@ def _collect_autotune() -> str:
 
 def get_metrics_text() -> str:
     """Return all metrics as a Prometheus-format string."""
-    sections = [
-        _collect_cpu(),
-        _collect_memory(),
-        _collect_gpu(),
-        _collect_npu(),
-        _collect_threads(),
-        _collect_virt(),
-        _collect_autotune(),
-    ]
+    collectors = (
+        _collect_cpu,
+        _collect_memory,
+        _collect_gpu,
+        _collect_npu,
+        _collect_threads,
+        _collect_virt,
+        _collect_autotune,
+    )
+    # Hardware probes are independent and some operating-system commands can
+    # each take several seconds.  Run them concurrently so a scrape is bounded
+    # by the slowest detector instead of the sum of every detector latency.
+    with ThreadPoolExecutor(max_workers=len(collectors), thread_name_prefix="metrics") as pool:
+        sections = list(pool.map(lambda collect: collect(), collectors))
     return "\n".join(s for s in sections if s)
 
 

@@ -18,10 +18,45 @@ import os
 import platform
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger("pyaccelerate.gpu.detector")
+
+
+def _safe_run(args, *, timeout=5, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run wrapper that forcefully kills on timeout (Windows-safe).
+
+    Python 3.11 subprocess.run timeout can hang on Windows when the child
+    process holds stdout/stderr pipe handles.  We use Popen + communicate
+    with explicit kill to guarantee termination.
+    """
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    # capture_output is sugar for stdout/stderr=PIPE
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.PIPE
+    try:
+        proc = subprocess.Popen(args, **kwargs)
+    except FileNotFoundError:
+        raise
+    except Exception:
+        return subprocess.CompletedProcess(args, 1, "", "")
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            stdout, stderr = proc.communicate(timeout=2)
+        except Exception:
+            stdout, stderr = "", ""
+        return subprocess.CompletedProcess(args, 1, stdout or "", stderr or "")
+    except Exception:
+        proc.kill()
+        return subprocess.CompletedProcess(args, 1, "", "")
+    return subprocess.CompletedProcess(args, proc.returncode, stdout or "", stderr or "")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -479,13 +514,17 @@ def detect_all() -> List[GPUDevice]:
         gpus.extend(_probe_vulkan(seen))
 
         # ── Enrich existing GPUs with shared VRAM & Vulkan info ──
-        _enrich_shared_vram(gpus)
-
-        # ── Enrich NVIDIA GPUs with nvidia-smi data (driver, power, PCIe) ──
-        _enrich_nvidia_smi(gpus)
-
-        # ── Enrich AMD GPUs with rocm-smi / architecture data ──
-        _enrich_amd(gpus)
+        # These independent OS/tool queries may each take seconds on Windows.
+        # Running them together preserves all enrichment data while keeping
+        # first-time detection responsive.
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="gpu-enrich") as pool:
+            futures = (
+                pool.submit(_enrich_shared_vram, gpus),
+                pool.submit(_enrich_nvidia_smi, gpus),
+                pool.submit(_enrich_amd, gpus),
+            )
+            for future in futures:
+                future.result()
 
         # ── OS-level fallback ──
         if not gpus:
@@ -750,7 +789,7 @@ def _probe_arm_gpu(seen: set[str]) -> List[GPUDevice]:
     # ── Vulkan fallback (Termux) ──
     if not gpus:
         try:
-            r = subprocess.run(
+            r = _safe_run(
                 ["vulkaninfo", "--summary"],
                 capture_output=True, text=True, timeout=5,
             )
@@ -952,7 +991,7 @@ def _run_vulkaninfo() -> str:
     # Try --summary first (faster), fall back to full output
     for args in (["vulkaninfo", "--summary"], ["vulkaninfo"]):
         try:
-            r = subprocess.run(args, capture_output=True, text=True, timeout=15)
+            r = _safe_run(args, capture_output=True, text=True, timeout=15)
             if r.returncode == 0 and "deviceName" in r.stdout:
                 return r.stdout
         except FileNotFoundError:
@@ -971,33 +1010,26 @@ def _detect_vram_wmi(gpu_name_hint: str = "") -> Tuple[int, int]:
     if platform.system() != "Windows":
         return 0, 0
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_VideoController | "
-             "Select-Object Name, AdapterRAM, "
-             "AdapterDACType | ConvertTo-Json -Compress"],
-            capture_output=True, text=True, timeout=10,
+        # Use wmic instead of powershell (faster, no hang risk)
+        r = _safe_run(
+            ["wmic", "path", "Win32_VideoController", "get",
+             "Name,AdapterRAM,AdapterDACType", "/format:csv"],
+            capture_output=True, text=True, timeout=5,
         )
         if r.returncode != 0 or not r.stdout.strip():
             return 0, 0
 
-        import json as _json
-        data = _json.loads(r.stdout)
-        if isinstance(data, dict):
-            data = [data]
-
         hint = gpu_name_hint.lower()
-        for ctrl in data:
-            name = (ctrl.get("Name") or "").lower()
+        for line in r.stdout.strip().splitlines():
+            parts = line.split(",")
+            if len(parts) < 4:
+                continue
+            # CSV: Node,AdapterDACType,AdapterRAM,Name
+            name = parts[-1].strip().lower() if len(parts) >= 4 else ""
             if hint and hint not in name and name not in hint:
                 continue
-            adapter_ram = ctrl.get("AdapterRAM") or 0
-            if isinstance(adapter_ram, str):
-                adapter_ram = int(adapter_ram) if adapter_ram.isdigit() else 0
-            # For Intel iGPU: AdapterRAM is typically the small dedicated
-            # portion (128 MB).  Total usable VRAM is much larger (shared
-            # from system RAM), reported by DxDiag.  We query it via
-            # another CIM class if available.
+            adapter_ram_str = parts[2].strip() if len(parts) >= 3 else "0"
+            adapter_ram = int(adapter_ram_str) if adapter_ram_str.isdigit() else 0
             shared = 0
             if "intel" in name:
                 shared = _detect_shared_vram_intel()
@@ -1073,30 +1105,32 @@ def _query_wmi_all_adapters() -> List[Dict[str, Any]]:
     if platform.system() != "Windows":
         return []
     try:
-        # Use DxDiag-style query for shared memory too
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_VideoController | "
-             "Select-Object Name,AdapterRAM,AdapterDACType,DriverVersion,"
-             "CurrentHorizontalResolution | ConvertTo-Json -Compress"],
-            capture_output=True, text=True, timeout=10,
+        r = _safe_run(
+            ["wmic", "path", "Win32_VideoController", "get",
+             "Name,AdapterRAM,AdapterDACType,DriverVersion", "/format:csv"],
+            capture_output=True, text=True, timeout=5,
         )
         if r.returncode != 0 or not r.stdout.strip():
             return []
-        import json as _json
-        data = _json.loads(r.stdout)
-        if isinstance(data, dict):
-            data = [data]
 
         results = []
-        for ctrl in data:
-            name = ctrl.get("Name") or ""
-            adapter_ram = ctrl.get("AdapterRAM") or 0
-            if isinstance(adapter_ram, str):
-                adapter_ram = int(adapter_ram) if adapter_ram.isdigit() else 0
-            drv = ctrl.get("DriverVersion") or ""
+        header_skipped = False
+        for line in r.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if not header_skipped:
+                header_skipped = True
+                continue
+            parts = line.split(",")
+            if len(parts) < 5:
+                continue
+            # CSV: Node,AdapterDACType,AdapterRAM,DriverVersion,Name
+            name = parts[-1].strip()
+            adapter_ram_str = parts[2].strip()
+            adapter_ram = int(adapter_ram_str) if adapter_ram_str.isdigit() else 0
+            drv = parts[3].strip() if len(parts) >= 4 else ""
 
-            # Shared memory estimation: Windows allocates ~half system RAM
             shared = 0
             try:
                 import psutil  # type: ignore[import-untyped]
@@ -1146,7 +1180,7 @@ def _enrich_nvidia_smi(gpus: List[GPUDevice]) -> None:
         fields = ("index,name,driver_version,pcie.link.gen.max,"
                   "pcie.link.width.max,power.limit,"
                   "clocks.max.graphics,clocks.max.memory")
-        r = subprocess.run(
+        r = _safe_run(
             ["nvidia-smi", f"--query-gpu={fields}",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=10,
@@ -1157,13 +1191,13 @@ def _enrich_nvidia_smi(gpus: List[GPUDevice]) -> None:
         # Also grab CUDA driver version
         cuda_ver = ""
         try:
-            r2 = subprocess.run(
+            r2 = _safe_run(
                 ["nvidia-smi", "--query-gpu=driver_version",
                  "--format=csv,noheader"],
                 capture_output=True, text=True, timeout=5,
             )
             # nvidia-smi header shows CUDA version
-            r3 = subprocess.run(
+            r3 = _safe_run(
                 ["nvidia-smi"],
                 capture_output=True, text=True, timeout=10,
             )
@@ -1251,7 +1285,7 @@ def _enrich_amd(gpus: List[GPUDevice]) -> None:
 
     # Try rocm-smi for driver/clock info
     try:
-        r = subprocess.run(
+        r = _safe_run(
             ["rocm-smi", "--showdriverversion", "--showclocks", "--csv"],
             capture_output=True, text=True, timeout=10,
         )
@@ -1304,18 +1338,18 @@ def _detect_os_gpu_names() -> List[str]:
     names: List[str] = []
     try:
         if platform.system() == "Windows":
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_VideoController).Name"],
-                capture_output=True, text=True, timeout=10,
+            r = _safe_run(
+                ["wmic", "path", "Win32_VideoController", "get", "Name", "/value"],
+                capture_output=True, text=True, timeout=5,
             )
             if r.returncode == 0:
-                for line in r.stdout.strip().splitlines():
-                    line = line.strip()
-                    if line:
-                        names.append(line)
+                for line in r.stdout.splitlines():
+                    if line.startswith("Name="):
+                        name = line.split("=", 1)[1].strip()
+                        if name:
+                            names.append(name)
         elif platform.system() == "Darwin":
-            r = subprocess.run(
+            r = _safe_run(
                 ["system_profiler", "SPDisplaysDataType"],
                 capture_output=True, text=True, timeout=10,
             )
@@ -1333,7 +1367,7 @@ def _detect_os_gpu_names() -> List[str]:
                         names.append(soc.gpu_name)
                     if not names:
                         # Try getprop for GPU hints
-                        r2 = subprocess.run(
+                        r2 = _safe_run(
                             ["getprop", "ro.hardware.egl"],
                             capture_output=True, text=True, timeout=3,
                         )
@@ -1343,7 +1377,7 @@ def _detect_os_gpu_names() -> List[str]:
                 pass
 
             if not names:
-                r = subprocess.run(
+                r = _safe_run(
                     ["lspci"], capture_output=True, text=True, timeout=10,
                 )
                 for line in r.stdout.splitlines():
