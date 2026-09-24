@@ -1,6 +1,6 @@
 ## What's New
 
-### 0.11.1 — Machine-aware dependency installation
+### 0.11.2 — Machine-aware dependency installation
 - NumPy 1.26+ is now installed with the core package instead of requiring an extra.
 - `pyaccelerate info` checks core, GPU, and NPU dependencies and offers every missing package supported by the detected hardware.
 - `pyaccelerate info --install-deps` installs all recommendations into the active Python interpreter without an interactive prompt.
