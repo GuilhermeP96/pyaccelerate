@@ -44,6 +44,6 @@ logs/
 # Benchmarks output
 benchmarks/output/
 benchmarks/results.json
-test_*
+/test_*
 git_status_output.txt
 termux_screen.png

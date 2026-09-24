@@ -194,7 +194,8 @@ set_energy_profile(EnergyProfile.PERFORMANCE)
 ## CLI
 
 ```bash
-pyaccelerate info          # Full hardware report (+ offers to install missing deps)
+pyaccelerate info          # Full hardware report (+ offers machine-specific deps)
+pyaccelerate info --install-deps  # Install all missing deps for this machine
 pyaccelerate benchmark     # Run micro-benchmarks
 pyaccelerate gpu           # GPU details (architecture, cores, VRAM, clocks, features, driver, PCIe)
 pyaccelerate cpu           # CPU details
@@ -615,7 +616,7 @@ const bench = await client.runBenchmark();
 ## Installation Options
 
 ```bash
-# Core (CPU + threads + memory + virt)
+# Core (CPU + threads + memory + virt; includes NumPy and psutil)
 pip install pyaccelerate
 
 # With NVIDIA GPU support
@@ -635,6 +636,9 @@ pip install pyaccelerate[grpc]
 
 # Kubernetes integration
 pip install pyaccelerate[k8s]
+
+# Install/repair optional dependencies detected for the current hardware
+pyaccelerate info --install-deps
 
 # Development
 pip install pyaccelerate[dev]

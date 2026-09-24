@@ -29,6 +29,7 @@ classifiers = [
 ]
 keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxruntime", "threads", "performance", "optimization", "priority", "energy", "max-mode", "arm", "android", "termux", "aarch64", "snapdragon", "big-little", "iot", "sbc", "raspberry-pi", "jetson", "coral", "hailo", "embedded", "autotune", "prometheus", "metrics", "grpc", "kubernetes", "k8s", "server", "api", "work-stealing", "lock-free", "adaptive-scheduler", "tokio", "forkjoinpool"]
 dependencies = [
+    "numpy>=1.26",
     "psutil>=5.9",
 ]
 

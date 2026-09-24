@@ -14,7 +14,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
+import subprocess
 import sys
+from importlib import metadata
+from typing import Any
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -31,7 +35,12 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command")
 
     # info
-    sub.add_parser("info", help="Full engine report")
+    info_p = sub.add_parser("info", help="Full engine report")
+    info_p.add_argument(
+        "--install-deps",
+        action="store_true",
+        help="Install every missing dependency recommended for this machine",
+    )
 
     # status
     sub.add_parser("status", help="One-line status")
@@ -137,7 +146,7 @@ def main(argv: list[str] | None = None) -> None:
         from pyaccelerate.engine import Engine
         engine = Engine()
         print(engine.summary())
-        _offer_missing_deps(engine)
+        _offer_missing_deps(engine, install_all=args.install_deps)
         return
 
     if args.command == "status":
@@ -642,37 +651,103 @@ def main(argv: list[str] | None = None) -> None:
         return
 
 
-def _offer_missing_deps(engine) -> None:
-    """After 'info', offer to install missing GPU/NPU frameworks."""
-    import re
-    import subprocess as sp
+def _distribution_available(package: str) -> bool:
+    """Return whether the exact Python distribution is installed."""
+    try:
+        metadata.version(package)
+        return True
+    except metadata.PackageNotFoundError:
+        return False
 
-    packages: list[str] = []
+
+def _package_name(requirement: str) -> str:
+    """Extract and normalize the distribution name from a pip requirement."""
+    name = re.split(r"[<>=!~;\[]", requirement, maxsplit=1)[0]
+    return name.strip().lower()
+
+
+def _requirement_missing(requirement: str) -> bool:
+    package = _package_name(requirement)
+    return not _distribution_available(package)
+
+
+def _packages_from_hint(hint: str) -> list[str]:
+    return re.findall(r"pip install ([A-Za-z0-9_.-]+(?:\[[^\]]+\])?(?:[<>=!~]+[^\s#]+)?)", hint)
+
+
+def _missing_dependency_packages(engine: Any) -> list[str]:
+    """Return core and hardware-specific packages missing on this machine."""
+    candidates = ["numpy>=1.26", "psutil>=5.9"]
 
     # GPU missing?
     if engine.gpus and not engine.usable_gpus:
         from pyaccelerate.gpu import get_install_hint
         hint = get_install_hint()
         if hint:
-            packages.extend(re.findall(r"pip install (\S+)", hint))
+            candidates.extend(_packages_from_hint(hint))
 
     # NPU missing?
     if engine.npus and not engine.usable_npus:
         from pyaccelerate.npu import get_install_hint as npu_hint
         hint = npu_hint()
         if hint:
-            packages.extend(re.findall(r"pip install (\S+)", hint))
+            candidates.extend(_packages_from_hint(hint))
 
-    packages = sorted(set(packages))
-    if not packages or not sys.stdin.isatty():
+    packages: list[str] = []
+    seen: set[str] = set()
+    for requirement in candidates:
+        package = _package_name(requirement)
+        if package not in seen and _requirement_missing(requirement):
+            packages.append(requirement)
+            seen.add(package)
+    return packages
+
+
+def _install_packages(packages: list[str]) -> bool:
+    """Install packages into the interpreter running PyAccelerate."""
+    print(f"\nInstalling: {', '.join(packages)} ...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", *packages],
+            timeout=900,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"\nInstallation failed: {exc}")
+        result = None
+
+    if result is not None and result.returncode == 0:
+        print("\nDone! Run 'pyaccelerate info' again to verify.")
+        return True
+
+    print("\nInstallation failed. Try manually:")
+    for package in packages:
+        print(f"  {sys.executable} -m pip install {package}")
+    return False
+
+
+def _offer_missing_deps(engine: Any, *, install_all: bool = False) -> None:
+    """After ``info``, install or offer all dependencies this machine needs."""
+    packages = _missing_dependency_packages(engine)
+
+    if not packages:
         return
 
-    print(f"\nMissing libraries detected for your hardware.")
-    print(f"Suggested packages:")
+    if install_all:
+        _install_packages(packages)
+        return
+
+    if not sys.stdin.isatty():
+        print("\nMissing dependencies: " + ", ".join(packages))
+        print("Run 'pyaccelerate info --install-deps' to install them.")
+        return
+
+    print("\nMissing libraries detected for your machine.")
+    print("Suggested packages:")
     for i, pkg in enumerate(packages, 1):
         print(f"  [{i}] {pkg}")
-    print(f"  [A] Install all")
-    print(f"  [N] Skip")
+    print("  [A] Install all")
+    print("  [N] Skip")
 
     try:
         choice = input("\nWhich packages to install? [A/1/2/.../N]: ").strip()
@@ -699,17 +774,7 @@ def _offer_missing_deps(engine) -> None:
         print("No valid selection.")
         return
 
-    print(f"\nInstalling: {', '.join(to_install)} ...")
-    result = sp.run(
-        [sys.executable, "-m", "pip", "install", *to_install],
-        timeout=300,
-    )
-    if result.returncode == 0:
-        print("\nDone! Run 'pyaccelerate info' again to verify.")
-    else:
-        print("\nInstallation failed. Try manually:")
-        for pkg in to_install:
-            print(f"  pip install {pkg}")
+    _install_packages(to_install)
 
 
 if __name__ == "__main__":
