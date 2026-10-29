@@ -51,6 +51,7 @@ from concurrent.futures import (
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
 
+from pyaccelerate._report import render_report
 from pyaccelerate.cpu import CPUInfo, detect as detect_cpu, recommend_workers
 from pyaccelerate.gpu import detect_all as detect_gpus, gpu_available
 from pyaccelerate.npu import detect_all as detect_npus, npu_available
@@ -513,28 +514,24 @@ class MaxMode:
         m = self._state.hardware_manifest
         elapsed = time.time() - self._state.activation_time
         lines = [
-            "╔══════════════════════════════════════════════════════════════╗",
-            "║               MAX MODE — ACTIVE                            ║",
-            "╠══════════════════════════════════════════════════════════════╣",
-            f"║  CPU:     {m.get('cpu', 'N/A')}",
-            f"║  GPU:     {m.get('gpu_usable', 0)} usable ({m.get('gpu_best', 'N/A')})",
+            f"CPU:     {m.get('cpu', 'N/A')}",
+            f"GPU:     {m.get('gpu_usable', 0)} usable ({m.get('gpu_best', 'N/A')})",
         ]
         if m.get('gpu_shared_vram_gb', 0):
             lines.append(
-                f"║           VRAM: {m.get('gpu_dedicated_vram_gb', 0)} GB dedicated + "
+                f"         VRAM: {m.get('gpu_dedicated_vram_gb', 0)} GB dedicated + "
                 f"{m.get('gpu_shared_vram_gb', 0)} GB shared = {m.get('gpu_total_vram_gb', 0)} GB total"
             )
         if m.get('gpu_vulkan_version'):
             disc = 'discrete' if m.get('gpu_is_discrete') else 'integrated'
-            lines.append(f"║           Vulkan: {m['gpu_vulkan_version']}  |  Type: {disc}")
+            lines.append(f"         Vulkan: {m['gpu_vulkan_version']}  |  Type: {disc}")
         lines += [
-            f"║  NPU:     {m.get('npu_usable', 0)} usable",
-            f"║  RAM:     {m.get('ram_total_gb', 0)} GB total, {m.get('ram_available_gb', 0)} GB avail",
-            f"║  IO Pool: {m.get('io_pool_size', 0)} threads",
-            f"║  CPU Pool: {m.get('cpu_pool_size', 0)} processes",
-            f"║  Buffers: {m.get('buffers_pre_allocated', 0)} pre-allocated",
-            f"║  Pressure: {m.get('memory_pressure', 'N/A')}",
-            f"║  Uptime:  {elapsed:.1f} s",
-            "╚══════════════════════════════════════════════════════════════╝",
+            f"NPU:     {m.get('npu_usable', 0)} usable",
+            f"RAM:     {m.get('ram_total_gb', 0)} GB total, {m.get('ram_available_gb', 0)} GB avail",
+            f"IO Pool: {m.get('io_pool_size', 0)} threads",
+            f"CPU Pool: {m.get('cpu_pool_size', 0)} processes",
+            f"Buffers: {m.get('buffers_pre_allocated', 0)} pre-allocated",
+            f"Pressure: {m.get('memory_pressure', 'N/A')}",
+            f"Uptime:  {elapsed:.1f} s",
         ]
-        return "\n".join(lines)
+        return render_report("MAX MODE - ACTIVE", lines)

@@ -20,6 +20,9 @@ import sys
 from importlib import metadata
 from typing import Any
 
+from packaging.requirements import Requirement
+from packaging.version import InvalidVersion
+
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
@@ -157,7 +160,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "benchmark":
         from pyaccelerate.benchmark import run_all
-        print("Running benchmarks...")
+        print("Running benchmarks...", file=sys.stderr if args.as_json else sys.stdout)
         results = run_all(quick=not args.full)
         if args.as_json:
             print(json.dumps(results, indent=2))
@@ -563,7 +566,7 @@ def main(argv: list[str] | None = None) -> None:
             return
 
         # Run tune
-        print("Running auto-tune benchmarks…")
+        print("Running auto-tune benchmarks…", file=sys.stderr if args.tune_json else sys.stdout)
         profile = _at(quick=not args.full)
         if args.tune_json:
             print(json.dumps(_asd(profile), indent=2))
@@ -572,7 +575,7 @@ def main(argv: list[str] | None = None) -> None:
 
         if args.apply:
             result = _ap(profile)
-            print(f"\nProfile applied: {result}")
+            print(f"\nProfile applied: {result}", file=sys.stderr if args.tune_json else sys.stdout)
         return
 
     if args.command == "metrics":
@@ -667,8 +670,17 @@ def _package_name(requirement: str) -> str:
 
 
 def _requirement_missing(requirement: str) -> bool:
-    package = _package_name(requirement)
-    return not _distribution_available(package)
+    parsed = Requirement(requirement)
+    if parsed.marker and not parsed.marker.evaluate():
+        return False
+    if not _distribution_available(parsed.name):
+        return True
+    if not parsed.specifier:
+        return False
+    try:
+        return not parsed.specifier.contains(metadata.version(parsed.name), prereleases=True)
+    except (metadata.PackageNotFoundError, InvalidVersion):
+        return True
 
 
 def _packages_from_hint(hint: str) -> list[str]:
@@ -734,7 +746,8 @@ def _offer_missing_deps(engine: Any, *, install_all: bool = False) -> None:
         return
 
     if install_all:
-        _install_packages(packages)
+        if not _install_packages(packages):
+            raise SystemExit(1)
         return
 
     if not sys.stdin.isatty():
@@ -774,7 +787,8 @@ def _offer_missing_deps(engine: Any, *, install_all: bool = False) -> None:
         print("No valid selection.")
         return
 
-    _install_packages(to_install)
+    if not _install_packages(to_install):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

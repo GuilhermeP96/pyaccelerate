@@ -31,6 +31,8 @@ keywords = ["acceleration", "gpu", "cuda", "opencl", "npu", "openvino", "onnxrun
 dependencies = [
     "numpy>=1.26",
     "psutil>=5.9",
+    "packaging>=23.2",
+    "wcwidth>=0.2.13",
 ]
 
 [project.optional-dependencies]

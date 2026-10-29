@@ -26,6 +26,7 @@ import os
 from concurrent.futures import Future
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 
+from pyaccelerate._report import render_report
 from pyaccelerate.cpu import CPUInfo, detect as detect_cpu, recommend_workers
 from pyaccelerate.gpu import GPUDevice, detect_all as detect_gpus, gpu_available, best_gpu, get_install_hint
 from pyaccelerate.npu import NPUDevice, detect_all as detect_npus, npu_available, best_npu, get_install_hint as npu_install_hint
@@ -280,19 +281,15 @@ class Engine:
 
     def summary(self) -> str:
         """Human-readable multi-line report of all subsystems."""
-        lines: list[str] = [
-            "╔══════════════════════════════════════════════════════════════╗",
-            "║              PyAccelerate — Engine Report                   ║",
-            "╠══════════════════════════════════════════════════════════════╣",
-        ]
+        lines: list[str | None] = []
 
         # CPU
         c = self._cpu
-        lines.append(f"║  CPU: {c.short_label()}")
+        lines.append(f"CPU: {c.short_label()}")
         if c.frequency_max_mhz:
-            lines.append(f"║       Base: {c.frequency_mhz:.0f} MHz | Boost: {c.frequency_max_mhz:.0f} MHz")
+            lines.append(f"     Base: {c.frequency_mhz:.0f} MHz | Boost: {c.frequency_max_mhz:.0f} MHz")
         if c.numa_nodes > 1:
-            lines.append(f"║       NUMA: {c.numa_nodes} nodes")
+            lines.append(f"     NUMA: {c.numa_nodes} nodes")
         if c.is_arm:
             arm_parts = []
             if c.soc_name:
@@ -305,21 +302,21 @@ class Engine:
             if c.has_sve:
                 arm_parts.append("SVE")
             if arm_parts:
-                lines.append(f"║       ARM: {' | '.join(arm_parts)}")
+                lines.append(f"     ARM: {' | '.join(arm_parts)}")
         if c.flags and not c.is_arm:
-            lines.append(f"║       ISA: {', '.join(c.flags[:8])}")
+            lines.append(f"     ISA: {', '.join(c.flags[:8])}")
         elif c.flags and c.is_arm:
-            lines.append(f"║       Features: {', '.join(c.flags[:10])}")
+            lines.append(f"     Features: {', '.join(c.flags[:10])}")
 
         # GPU
         usable = self.usable_gpus
         if usable and self.gpu_enabled:
             best = usable[0]
-            lines.append(f"║  GPU: {best.short_label()}")
+            lines.append(f"GPU: {best.short_label()}")
             # Memory breakdown
             if best.shared_memory_bytes:
                 lines.append(
-                    f"║       VRAM: {best.memory_gb:.1f} GB dedicated + "
+                    f"     VRAM: {best.memory_gb:.1f} GB dedicated + "
                     f"{best.shared_memory_gb:.1f} GB shared = {best.total_memory_gb:.1f} GB total"
                 )
             # Architecture & compute
@@ -331,7 +328,7 @@ class Engine:
             if best.cuda_cores:
                 arch_parts.append(f"{best.cuda_cores} CUDA cores")
             if arch_parts:
-                lines.append(f"║       Arch: {' | '.join(arch_parts)}")
+                lines.append(f"     Arch: {' | '.join(arch_parts)}")
             # Acceleration features
             feat_parts: list[str] = []
             if best.has_tensor:
@@ -347,7 +344,7 @@ class Engine:
             if best.copy_engines:
                 feat_parts.append(f"Copy ×{best.copy_engines}")
             if feat_parts:
-                lines.append(f"║       Features: {' | '.join(feat_parts)}")
+                lines.append(f"     Features: {' | '.join(feat_parts)}")
             # Clocks & memory type
             clk_parts: list[str] = []
             if best.boost_clock_mhz:
@@ -359,7 +356,7 @@ class Engine:
             if best.memory_bus_width:
                 clk_parts.append(f"{best.memory_bus_width}-bit bus")
             if clk_parts:
-                lines.append(f"║       Clock: {' | '.join(clk_parts)}")
+                lines.append(f"     Clock: {' | '.join(clk_parts)}")
             # PCIe & driver
             hw_parts: list[str] = []
             if best.pcie_gen:
@@ -374,45 +371,45 @@ class Engine:
             if best.cuda_driver_version:
                 hw_parts.append(f"CUDA: {best.cuda_driver_version}")
             if hw_parts:
-                lines.append(f"║       HW: {' | '.join(hw_parts)}")
+                lines.append(f"     HW: {' | '.join(hw_parts)}")
             if best.vulkan_version:
                 disc = "discrete" if best.is_discrete else "integrated"
-                lines.append(f"║       Vulkan: {best.vulkan_version}  |  Type: {disc}")
+                lines.append(f"     Vulkan: {best.vulkan_version}  |  Type: {disc}")
             if len(usable) > 1:
                 mode = "multi-GPU ACTIVE" if self.multi_gpu else "available"
                 others = ", ".join(g.name for g in usable[1:])
-                lines.append(f"║       + {others} ({mode})")
+                lines.append(f"     + {others} ({mode})")
         elif usable:
-            lines.append(f"║  GPU: {usable[0].name} (DISABLED by user)")
+            lines.append(f"GPU: {usable[0].name} (DISABLED by user)")
         else:
             all_g = self._gpus
             if all_g:
-                lines.append(f"║  GPU: {all_g[0].name} (no compute library)")
+                lines.append(f"GPU: {all_g[0].name} (no compute library)")
                 hint = get_install_hint()
                 if hint:
-                    lines.append(f"║       Hint: {hint}")
+                    lines.append(f"     Hint: {hint}")
             else:
-                lines.append("║  GPU: None detected")
+                lines.append("GPU: None detected")
 
         # NPU
         usable_n = self.usable_npus
         if usable_n and self.npu_enabled:
             best_n = usable_n[0]
-            lines.append(f"║  NPU: {best_n.short_label()}")
+            lines.append(f"NPU: {best_n.short_label()}")
         elif self._npus:
             n0 = self._npus[0]
-            lines.append(f"║  NPU: {n0.name} (no compute framework)")
+            lines.append(f"NPU: {n0.name} (no compute framework)")
             hint_n = npu_install_hint()
             if hint_n:
-                lines.append(f"║       Hint: {hint_n}")
+                lines.append(f"     Hint: {hint_n}")
         else:
-            lines.append("║  NPU: None detected")
+            lines.append("NPU: None detected")
 
         # Memory
         ms = mem_stats()
         if "system_total_gb" in ms:
             lines.append(
-                f"║  RAM: {ms['system_total_gb']:.1f} GB total | "
+                f"RAM: {ms['system_total_gb']:.1f} GB total | "
                 f"{ms['system_available_gb']:.1f} GB available | "
                 f"Pressure: {self.memory_pressure.name}"
             )
@@ -420,13 +417,13 @@ class Engine:
         # Virtualization
         vp = self._virt.summary_parts()
         if vp:
-            lines.append(f"║  Virt: {', '.join(vp)}")
+            lines.append(f"Virt: {', '.join(vp)}")
         else:
-            lines.append("║  Virt: None detected")
+            lines.append("Virt: None detected")
 
         # Pools
         lines.append(
-            f"║  Pools: IO={self._io_workers} virtual threads | "
+            f"Pools: IO={self._io_workers} virtual threads | "
             f"CPU={self._cpu_workers} processes"
         )
 
@@ -440,9 +437,9 @@ class Engine:
                 batt = get_battery_info()
                 batt_str = f"{batt.get('capacity', '?')}% ({batt.get('status', '?')})" if batt else "N/A"
                 throttle = "⚠ THROTTLED" if is_thermally_throttled() else "OK"
-                lines.append(f"║  Platform: {env} | Battery: {batt_str} | Thermal: {throttle}")
+                lines.append(f"Platform: {env} | Battery: {batt_str} | Thermal: {throttle}")
             except Exception:
-                lines.append("║  Platform: Android")
+                lines.append("Platform: Android")
 
         # SBC / IoT
         if c.is_sbc:
@@ -455,7 +452,7 @@ class Engine:
                         sbc_parts.append(f"SoC: {sbc.soc_name}")
                     if sbc.ram_mb:
                         sbc_parts.append(f"RAM: {sbc.ram_mb} MB")
-                    lines.append(f"║  SBC: {' | '.join(sbc_parts)}")
+                    lines.append(f"SBC: {' | '.join(sbc_parts)}")
                     periph_parts = []
                     if sbc.has_gpio:
                         periph_parts.append(f"GPIO({sbc.gpio_pins})")
@@ -466,21 +463,19 @@ class Engine:
                     if sbc.storage_type:
                         periph_parts.append(sbc.storage_type)
                     if periph_parts:
-                        lines.append(f"║       Peripherals: {', '.join(periph_parts)}")
+                        lines.append(f"     Peripherals: {', '.join(periph_parts)}")
                     if sbc.family == "jetson" and sbc.jetson_power_mode:
-                        lines.append(f"║       Jetson: Power={sbc.jetson_power_mode} | L4T={sbc.jetson_l4t_version or 'N/A'}")
+                        lines.append(f"     Jetson: Power={sbc.jetson_power_mode} | L4T={sbc.jetson_l4t_version or 'N/A'}")
                     thermal = get_sbc_thermal()
                     if thermal.get("cpu_temp_c") is not None:
                         temp_str = f"{thermal['cpu_temp_c']:.1f}°C"
                         rec = thermal.get("recommendation", "normal")
                         fan = f" | Fan: {thermal['fan_rpm']} RPM" if thermal.get("fan_rpm") else ""
-                        lines.append(f"║       Thermal: {temp_str} ({rec}){fan}")
-                    lines.append(f"║       IoT workers: {recommend_iot_workers()}")
+                        lines.append(f"     Thermal: {temp_str} ({rec}){fan}")
+                    lines.append(f"     IoT workers: {recommend_iot_workers()}")
             except Exception:
-                lines.append("║  SBC: detected (details unavailable)")
-
-        lines.append("╚══════════════════════════════════════════════════════════════╝")
-        return "\n".join(lines)
+                lines.append("SBC: detected (details unavailable)")
+        return render_report("PyAccelerate - Engine Report", lines)
 
     def status_line(self) -> str:
         """One-line summary for status bars / headers."""

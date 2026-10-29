@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from pyaccelerate._report import render_report
+
 log = logging.getLogger("pyaccelerate.autotune")
 
 # ── Persistent storage ────────────────────────────────────────────────────
@@ -478,20 +480,17 @@ def profile_summary(profile: Optional[TuneProfile] = None) -> str:
         return "No tune profile found. Run `pyaccelerate tune` to create one."
 
     lines = [
-        "╔══════════════════════════════════════════════════════════════╗",
-        "║              PyAccelerate — Tune Profile                    ║",
-        "╠══════════════════════════════════════════════════════════════╣",
-        f"║  Timestamp:  {profile.timestamp}",
-        f"║  Duration:   {profile.tune_duration_s:.1f} s",
-        f"║  HW hash:    {profile.hardware_hash}",
-        f"║  Version:    {profile.pyaccelerate_version}",
-        "╠══════════════════════════════════════════════════════════════╣",
-        f"║  Overall score:  {profile.overall_score}/100",
-        f"║  CPU score:      {profile.cpu_score}/100  "
+        f"Timestamp:  {profile.timestamp}",
+        f"Duration:   {profile.tune_duration_s:.1f} s",
+        f"HW hash:    {profile.hardware_hash}",
+        f"Version:    {profile.pyaccelerate_version}",
+        None,
+        f"Overall score:  {profile.overall_score}/100",
+        f"CPU score:      {profile.cpu_score}/100  "
         f"(single {profile.cpu_single_ops_sec:,} ops/s | multi {profile.cpu_multi_ops_sec:,} ops/s)",
-        f"║  Memory score:   {profile.memory_score}/100  "
+        f"Memory score:   {profile.memory_score}/100  "
         f"(W {profile.memory_write_gbps:.1f} GB/s | R {profile.memory_read_gbps:.1f} GB/s)",
-        f"║  GPU score:      {profile.gpu_score}/100  "
+        f"GPU score:      {profile.gpu_score}/100  "
         f"({profile.gpu_gflops:.1f} GFLOPS — {profile.gpu_backend or 'N/A'})",
     ]
     # GPU VRAM details (show when GPU detected, even if compute unavailable)
@@ -504,22 +503,21 @@ def profile_summary(profile: Optional[TuneProfile] = None) -> str:
         if profile.gpu_total_vram_gb:
             vram_parts.append(f"{profile.gpu_total_vram_gb:.1f} GB total")
         if vram_parts:
-            lines.append(f"║    VRAM:         {' + '.join(vram_parts)}")
+            lines.append(f"  VRAM:         {' + '.join(vram_parts)}")
         vk_str = profile.gpu_vulkan_version or 'N/A'
         disc_str = 'discrete' if profile.gpu_is_discrete else 'integrated'
-        lines.append(f"║    Vulkan:       {vk_str}  |  Type: {disc_str}")
+        lines.append(f"  Vulkan:       {vk_str}  |  Type: {disc_str}")
     lines += [
-        "╠══════════════════════════════════════════════════════════════╣",
-        f"║  IO workers:     {profile.optimal_io_workers}",
-        f"║  CPU workers:    {profile.optimal_cpu_workers}",
-        f"║  GPU strategy:   {profile.optimal_gpu_strategy}",
-        f"║  Priority:       {profile.recommended_priority}",
-        f"║  Energy:         {profile.recommended_energy}",
-        f"║  Thread P95:     {profile.thread_latency_p95_us:.0f} µs",
-        f"║  RAM headroom:   {profile.memory_pressure_headroom_gb:.1f} GB",
-        "╚══════════════════════════════════════════════════════════════╝",
+        None,
+        f"IO workers:     {profile.optimal_io_workers}",
+        f"CPU workers:    {profile.optimal_cpu_workers}",
+        f"GPU strategy:   {profile.optimal_gpu_strategy}",
+        f"Priority:       {profile.recommended_priority}",
+        f"Energy:         {profile.recommended_energy}",
+        f"Thread P95:     {profile.thread_latency_p95_us:.0f} µs",
+        f"RAM headroom:   {profile.memory_pressure_headroom_gb:.1f} GB",
     ]
-    return "\n".join(lines)
+    return render_report("PyAccelerate - Tune Profile", lines)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

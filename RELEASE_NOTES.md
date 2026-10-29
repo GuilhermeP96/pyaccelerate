@@ -1,5 +1,12 @@
 ## What's New
 
+### 0.11.3 - Adaptive terminal reports and CLI reliability
+- Engine, max-mode and tune reports now size borders and padding from their contents, align labels and wrap long values to fit the terminal.
+- Terminal cell widths account for ANSI colors, wide Unicode characters, combining accents and joined emoji; every data row has a matching right border.
+- Benchmark and tune JSON output keeps progress and apply messages on stderr so stdout remains parseable.
+- Dependency checks respect version constraints and environment markers; failed dependency installation exits with a nonzero status.
+- Added report and CLI regression coverage for narrow terminals, long hardware names/ISA lists and machine-readable output.
+
 ### 0.11.2 — Machine-aware dependency installation
 - NumPy 1.26+ is now installed with the core package instead of requiring an extra.
 - `pyaccelerate info` checks core, GPU, and NPU dependencies and offers every missing package supported by the detected hardware.
