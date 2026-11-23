@@ -37,8 +37,12 @@ def test_missing_dependencies_include_numpy_and_machine_backends(monkeypatch) ->
 
     packages = cli._missing_dependency_packages(_engine(gpu=True, npu=True))
 
+    if cli.sys.version_info < (3, 9):
+        numpy_requirement = "numpy>=1.24,<1.25"
+    else:
+        numpy_requirement = "numpy>=1.26"
     assert packages == [
-        "numpy>=1.26",
+        numpy_requirement,
         "cupy-cuda12x",
         "openvino",
         "onnxruntime-openvino",
