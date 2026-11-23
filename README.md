@@ -1,9 +1,9 @@
 # PyAccelerate
 
-**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU, NPU, ARM/Android/Termux, IoT/SBC, auto-tuning, Prometheus metrics, HTTP/gRPC server, Kubernetes auto-scaling, and maximum optimization mode.
+**High-performance Python acceleration engine** — CPU, threads, virtual threads, multi-GPU, NPU, ARM/Android/Termux, IoT/SBC, Apache Spark, auto-tuning, Prometheus metrics, HTTP/gRPC server, Kubernetes auto-scaling, and maximum optimization mode.
 
 [![CI](https://github.com/GuilhermeP96/pyaccelerate/actions/workflows/ci.yml/badge.svg)](https://github.com/GuilhermeP96/pyaccelerate/actions)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![PyPI version](https://img.shields.io/pypi/v/pyaccelerate.svg)](https://pypi.org/project/pyaccelerate/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/pyaccelerate.svg?label=PyPI%20downloads)](https://pypi.org/project/pyaccelerate/)
@@ -35,6 +35,7 @@
 | **`metrics`** | Prometheus metrics exporter (`/metrics` HTTP endpoint, all subsystems) |
 | **`server`** | JSON HTTP & gRPC server for multi-language integration (Node.js, Go, Java, etc.) |
 | **`k8s`** | Kubernetes operator — pod info, GPU node capacity, auto-scaling, manifest generation |
+| **`spark`** | Apache Spark 3.2+ compatibility, builder/session configuration, adaptive query execution and cluster-derived partition recommendations |
 | **`engine`** | Unified orchestrator — auto-detects everything and provides a single API |
 
 ## Quick Start
@@ -600,6 +601,38 @@ pyaccelerate k8s --manifest     # Generate Deployment YAML
 pyaccelerate k8s --json         # Machine-readable
 ```
 
+### Apache Spark 3.2+ Integration
+
+Spark support is optional and does not import PySpark when the core package is
+loaded. Install the extra only when PySpark is not already supplied by the
+cluster:
+
+```bash
+pip install "pyaccelerate[spark]"
+```
+
+Configure static settings on the builder before the Spark context starts, then
+apply runtime-safe SQL settings to the session:
+
+```python
+import pyspark
+from pyspark.sql import SparkSession
+from pyaccelerate.spark import configure_spark_builder, configure_spark_session
+
+builder = SparkSession.builder.appName("accelerated-etl")
+builder = configure_spark_builder(
+    builder,
+    spark_version=pyspark.__version__,
+)
+spark = builder.getOrCreate()
+applied = configure_spark_session(spark)
+```
+
+When a session is available, shuffle partitions derive from Spark's
+cluster-aware `defaultParallelism`. The helper does not infer executor sizing
+from driver hardware and supports managed clusters that provide PySpark through
+`PYTHONPATH` without package metadata.
+
 ### Node.js / npm Client
 
 A zero-dependency Node.js client is included in `bindings/nodejs/`:
@@ -636,6 +669,9 @@ pip install pyaccelerate[grpc]
 
 # Kubernetes integration
 pip install pyaccelerate[k8s]
+
+# Apache Spark 3.2+ integration
+pip install pyaccelerate[spark]
 
 # Install/repair optional dependencies detected for the current hardware
 pyaccelerate info --install-deps
@@ -717,6 +753,7 @@ pyaccelerate/
 ├── metrics.py      # Prometheus metrics exporter
 ├── server.py       # HTTP + gRPC multi-language API
 ├── k8s.py          # Kubernetes pod & GPU integration
+├── spark.py        # Apache Spark 3.2+ configuration integration
 ├── lockfree_queue.py # Lock-free MPMC & Chase-Lev deques
 ├── work_stealing.py  # Work-stealing scheduler (Tokio/Go/FJP)
 ├── adaptive.py       # Adaptive pressure-driven scheduler

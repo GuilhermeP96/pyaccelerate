@@ -689,7 +689,11 @@ def _packages_from_hint(hint: str) -> list[str]:
 
 def _missing_dependency_packages(engine: Any) -> list[str]:
     """Return core and hardware-specific packages missing on this machine."""
-    candidates = ["numpy>=1.26", "psutil>=5.9"]
+    if sys.version_info < (3, 9):
+        numpy_requirement = "numpy>=1.24,<1.25"
+    else:
+        numpy_requirement = "numpy>=1.26"
+    candidates = [numpy_requirement, "psutil>=5.9"]
 
     # GPU missing?
     if engine.gpus and not engine.usable_gpus:

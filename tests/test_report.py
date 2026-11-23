@@ -58,11 +58,9 @@ def test_all_reports_respect_terminal_width(width):
         "pyaccelerate._report.shutil.get_terminal_size",
         return_value=SimpleNamespace(columns=width),
     ):
-        with (
-            patch("pyaccelerate.engine.detect_gpus", return_value=[]),
-            patch("pyaccelerate.engine.detect_npus", return_value=[]),
-        ):
-            engine = Engine()
+        with patch("pyaccelerate.engine.detect_gpus", return_value=[]):
+            with patch("pyaccelerate.engine.detect_npus", return_value=[]):
+                engine = Engine()
         engine._cpu = replace(
             engine._cpu,
             brand="AMD EPYC 9114 96-Core Processor " * 5,

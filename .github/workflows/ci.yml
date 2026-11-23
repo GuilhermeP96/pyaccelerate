@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   lint:
@@ -25,14 +25,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install mypy psutil
+      - run: pip install "mypy>=1.10,<2.0" psutil
       - run: mypy src/ --ignore-missing-imports
 
   test:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -46,8 +46,22 @@ jobs:
         with:
           file: coverage.xml
 
+  spark-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+      - run: pip install -e ".[dev,spark]" "pyspark==3.2.4"
+      - run: pytest tests/test_spark.py tests/test_spark_integration.py -m "spark or not spark"
+
   build:
-    needs: [lint, typecheck, test]
+    needs: [lint, typecheck, test, spark-compat]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
